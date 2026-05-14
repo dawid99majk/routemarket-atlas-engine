@@ -162,10 +162,10 @@ export class AtlasWorkflowService {
   }
 
   async runMvp2(projectSlug: string) {
-    return this.runMvp2WithProgress(projectSlug);
+    return this.runMvp2WithProgress(projectSlug, undefined, undefined, { autoApprove: true });
   }
 
-  async runMvp2WithProgress(projectSlug: string, onProgress?: WorkflowProgressCallback, startStep?: string) {
+  async runMvp2WithProgress(projectSlug: string, onProgress?: WorkflowProgressCallback, startStep?: string, options: { autoApprove?: boolean } = {}) {
     let { project, sources } = await this.loadProjectBundle(projectSlug);
     const progress = async (message: string, value: number, currentStep: string, waitContext?: any) => {
       onProgress?.({ message, progress: value, currentStep, waitContext } as any);
@@ -177,6 +177,7 @@ export class AtlasWorkflowService {
     };
 
     const isApproved = async (stage: string) => {
+      if (options.autoApprove) return true;
       try {
         const approvals = await readJsonFile<any>(join(project.folderPath, "approvals.json"));
         return approvals.approvals.some((a: any) => a.stage === stage && a.decision === "approved");
@@ -210,7 +211,7 @@ export class AtlasWorkflowService {
               type: "approval_needed",
               stage: "gpx_summary_approval"
             });
-            return { pause: true };
+            return { pause: true, stage: "gpx_summary_approval" };
           }
         }
       },
@@ -225,7 +226,7 @@ export class AtlasWorkflowService {
               type: "approval_needed",
               stage: "claims_approval"
             });
-            return { pause: true };
+            return { pause: true, stage: "claims_approval" };
           }
         }
       },
@@ -240,7 +241,7 @@ export class AtlasWorkflowService {
               type: "approval_needed",
               stage: "poi_approval"
             });
-            return { pause: true };
+            return { pause: true, stage: "poi_approval" };
           }
         }
       },
@@ -255,7 +256,7 @@ export class AtlasWorkflowService {
               type: "approval_needed",
               stage: "concept_approval"
             });
-            return { pause: true };
+            return { pause: true, stage: "concept_approval" };
           }
         }
       },
@@ -271,7 +272,7 @@ export class AtlasWorkflowService {
               type: "approval_needed",
               stage: "guide_outline_approval"
             });
-            return { pause: true };
+            return { pause: true, stage: "guide_outline_approval" };
           }
         }
       },
@@ -287,7 +288,7 @@ export class AtlasWorkflowService {
               type: "approval_needed",
               stage: "guide_final_approval"
             });
-            return { pause: true };
+            return { pause: true, stage: "guide_final_approval" };
           }
         }
       },
@@ -307,13 +308,34 @@ export class AtlasWorkflowService {
       }
     ];
 
-    let currentStepId = startStep || "input";
+    let currentStepId = startStep;
+    if (!currentStepId) {
+      // Find the first step that isn't approved or missing artifacts
+      for (const step of steps) {
+        if (step.id === "input") {
+          const { exists } = await import("../../atlas-core/src/index.js");
+          if (!await exists(join(project.folderPath, "research_pack.json"))) {
+            currentStepId = "input";
+            break;
+          }
+          continue;
+        }
+
+        const stage = getStageForStep(step.id);
+        if (stage && !await isApproved(stage)) {
+          currentStepId = step.id;
+          break;
+        }
+      }
+      if (!currentStepId) currentStepId = "input"; // Fallback to start
+    }
+
     let startIndex = steps.findIndex(s => s.id === currentStepId);
     if (startIndex === -1) startIndex = 0;
 
     for (let i = startIndex; i < steps.length; i++) {
-      const result = await steps[i].run();
-      if (result?.pause) return { project, status: "paused", step: steps[i].id };
+      const result = await steps[i].run() as any;
+      if (result?.pause) return { project, status: "paused", step: steps[i].id, stage: result.stage };
     }
 
     onProgress?.({ message: "Workflow completed.", progress: 100, currentStep: "completed" });
@@ -355,7 +377,11 @@ export class AtlasWorkflowService {
       this.loadSources(project),
       this.loadClaims(project)
     ]);
-    return assessProjectReadiness({ project, artifacts, sources, claims });
+    
+    const { checkQualityGates } = await import("./quality-gates.js");
+    const qualityIssues = await checkQualityGates(project);
+    
+    return assessProjectReadiness({ project, artifacts, sources, claims, qualityIssues });
   }
 
   async getReview(projectSlug: string) {
@@ -365,7 +391,9 @@ export class AtlasWorkflowService {
       this.loadSources(project),
       this.loadClaims(project)
     ]);
-    return buildProjectReviewBundle({ project, artifacts, sources, claims });
+    const { checkQualityGates } = await import("./quality-gates.js");
+    const qualityIssues = await checkQualityGates(project);
+    return buildProjectReviewBundle({ project, artifacts, sources, claims, qualityIssues });
   }
 
   async submitReviewDecision(projectSlug: string, input: SubmitReviewDecisionRequest) {
@@ -484,7 +512,8 @@ const allowedProjectFiles = new Set([
   "research/deep/source_002.txt",
   "research/deep/source_003.txt",
   "media/license_report.md",
-  "media/manifest.json"
+  "media/manifest.json",
+  "missing_inputs.json"
 ]);
 
 const writableProjectFiles = new Set([
@@ -496,3 +525,16 @@ const writableProjectFiles = new Set([
   "review_checklist.md",
   "media/license_report.md"
 ]);
+
+function getStageForStep(stepId: string): string | undefined {
+  const map: Record<string, string> = {
+    gpx: "gpx_summary_approval",
+    claims: "claims_approval",
+    pois: "poi_approval",
+    concept: "concept_approval",
+    guide_outline: "guide_outline_approval",
+    guide: "guide_final_approval",
+    finalize: "media_approval"
+  };
+  return map[stepId];
+}

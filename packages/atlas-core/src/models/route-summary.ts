@@ -11,6 +11,9 @@ export const RouteSummarySchema = z.object({
   startPoint: z.string().optional(),
   endPoint: z.string().optional(),
   surfaceType: z.string().optional(),
+  hasElevation: z.boolean().default(false),
+  hasTime: z.boolean().default(false),
+  isLoop: z.boolean().default(false),
   validationStatus: z.enum(["draft", "needs_validation", "validated"]).default("needs_validation"),
   updatedAt: z.string()
 });

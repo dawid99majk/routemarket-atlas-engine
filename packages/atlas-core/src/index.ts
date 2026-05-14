@@ -12,6 +12,7 @@ export * from "./models/input-manifest.js";
 export * from "./models/creator-answers.js";
 export * from "./models/research-pack.js";
 export * from "./models/approval.js";
+export * from "./models/missing-inputs.js";
 export * from "./projects/create-route-project.js";
 export * from "./projects/slug.js";
 export * from "./projects/status.js";

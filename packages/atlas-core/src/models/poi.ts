@@ -23,7 +23,9 @@ export const PoiSchema = z.object({
   rating: z.number().optional(),
   userRatingCount: z.number().optional(),
   types: z.array(z.string()).optional(),
-  verificationSource: z.enum(["google_places", "deep_research", "manual", "placeholder"]).optional()
+  verificationSource: z.enum(["google_places", "deep_research", "manual", "placeholder"]).optional(),
+  status: z.enum(["suggested", "confirmed", "rejected"]).default("suggested"),
+  approvalDecision: z.string().optional()
 });
 
 export type Poi = z.infer<typeof PoiSchema>;

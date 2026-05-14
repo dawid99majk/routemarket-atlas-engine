@@ -50,9 +50,11 @@ export async function prepareMediaPack(project: RouteProject): Promise<MediaMani
     createdAt: now
   } as any);
 
+  const finalAssets = validateAndDeduplicateMedia(assets);
+
   const manifest: MediaManifest = {
     updatedAt: now,
-    assets: assets as any
+    assets: finalAssets
   };
 
   await writeJsonFile(manifestPath, manifest);
@@ -65,4 +67,29 @@ export async function prepareMediaPack(project: RouteProject): Promise<MediaMani
   await writeFile(join(project.folderPath, "media", "license_report.md"), report, "utf8");
 
   return manifest;
+}
+
+function validateAndDeduplicateMedia(assets: MediaAsset[]): MediaAsset[] {
+  const seenUrls = new Set<string>();
+  const seenPaths = new Set<string>();
+
+  return assets.map(a => {
+    // 1. Check for duplicates
+    if (a.url && seenUrls.has(a.url)) {
+      return { ...a, status: "duplicate" as any };
+    }
+    if (a.url) seenUrls.add(a.url);
+
+    if (a.path && seenPaths.has(a.path)) {
+      return { ...a, status: "duplicate" as any };
+    }
+    if (a.path) seenPaths.add(a.path);
+
+    // 2. Check for unsupported (mock: example.com)
+    if (a.url?.includes("example.com")) {
+      return { ...a, status: "unsupported" as any };
+    }
+
+    return { ...a, status: "active" as any };
+  });
 }

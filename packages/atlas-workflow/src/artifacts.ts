@@ -31,7 +31,8 @@ export const projectArtifactDefinitions: Omit<ProjectArtifact, "exists" | "sizeB
   { path: "route.gpx", label: "GPX track", type: "gpx" },
   { path: "route.geojson", label: "Route GeoJSON", type: "geojson" },
   { path: "media/license_report.md", label: "Media license report", type: "markdown" },
-  { path: "media/manifest.json", label: "Media manifest", type: "json" }
+  { path: "media/manifest.json", label: "Media manifest", type: "json" },
+  { path: "missing_inputs.json", label: "Missing inputs report", type: "json" }
 ];
 
 export async function listProjectArtifacts(projectFolder: string): Promise<ProjectArtifact[]> {

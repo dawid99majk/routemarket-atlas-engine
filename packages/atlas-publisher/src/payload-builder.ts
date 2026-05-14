@@ -1,6 +1,6 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Poi, Recommendation, RouteProject, RouteTip } from "../../atlas-core/src/index.js";
+import type { Poi, Recommendation, RouteProject, RouteTip, Claim } from "../../atlas-core/src/index.js";
 import { readJsonFile } from "../../atlas-core/src/index.js";
 import { getRouteMarketCategoryId } from "./category-mapping.js";
 import type { PreparedRouteMarketDraft, RouteMarketDraftPayload } from "./types.js";
@@ -14,17 +14,15 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   const gpxPath = join(project.folderPath, "route.gpx");
   const approvalsPath = join(project.folderPath, "approvals.json");
 
-  // Quality gates: Check for critical approvals
-  try {
-    const approvals = await readJsonFile<any>(approvalsPath);
-    const isApproved = (stage: string) => approvals.approvals.some((a: any) => a.stage === stage && a.decision === "approved");
-    
-    if (!isApproved("guide_final_approval") || !isApproved("media_approval")) {
-      console.warn("WARNING: Publishing without final guide or media approval.");
-    }
-  } catch {
-    console.warn("WARNING: No approvals.json found. Publishing in unverified state.");
+  const { checkQualityGates, QualityGateError } = await import("../../atlas-workflow/src/quality-gates.js");
+  const issues = await checkQualityGates(project);
+  if (issues.length > 0) {
+    throw new QualityGateError(issues);
   }
+
+  const claimsPath = join(project.folderPath, "claims.json");
+  const claims = await readOptionalJson<Claim[]>(claimsPath, []);
+  const allVerified = claims.length > 0 && claims.every(c => c.status === "verified" || c.id.startsWith("claim_tech_"));
 
   const description = await readOptionalText(guidePath);
   const routeSummary = await readOptionalJson<Record<string, unknown>>(routeSummaryPath);
@@ -50,7 +48,8 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
     end_point: optionalString(routeSummary?.endPoint),
     surface_type: optionalString(routeSummary?.surfaceType),
     tags: [project.category, project.region, project.language].filter(Boolean),
-    ai_assisted: true
+    ai_assisted: true,
+    is_verified: allVerified
   };
 
   const prepared: PreparedRouteMarketDraft = {
@@ -97,7 +96,8 @@ async function readPoisFromGeoJson(path: string): Promise<Poi[]> {
           ? (props.waterAvailability ?? props.water_availability) as Poi["waterAvailability"]
           : undefined,
         facilities: Array.isArray(props.facilities) ? props.facilities.map(String) : undefined,
-        isVerifiedByDeepResearch: typeof props.isVerifiedByDeepResearch === "boolean" ? props.isVerifiedByDeepResearch : typeof props.is_verified_by_deep_research === "boolean" ? props.is_verified_by_deep_research : undefined
+        isVerifiedByDeepResearch: typeof props.isVerifiedByDeepResearch === "boolean" ? props.isVerifiedByDeepResearch : typeof props.is_verified_by_deep_research === "boolean" ? props.is_verified_by_deep_research : undefined,
+        status: (props.status as any) || "confirmed"
       };
       pois.push(poi);
     }

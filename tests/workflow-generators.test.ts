@@ -46,7 +46,7 @@ describe("workflow generators", () => {
     expect(savedClaims.length).toBeGreaterThan(0);
     expect(tips.some((tip) => tip.category === "before_start_fuel")).toBe(true);
     expect(recommendations).toHaveLength(1);
-    expect(media.assets[0].role).toBe("gallery");
+    expect(media.assets[0].role).toBe("cover_candidate");
     expect(checklist).toContain("Human approved before publish");
     expect(updated.status).toBe("ready_for_review");
     expect(savedProject.status).toBe("ready_for_review");

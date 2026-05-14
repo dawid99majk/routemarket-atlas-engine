@@ -108,5 +108,30 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
     issues.push({ rule: "missing_route_summary", message: "route_summary.json is missing or invalid." });
   }
 
+  // 9: Missing Inputs
+  if (await fileExists(pPath("missing_inputs.json"))) {
+    try {
+      const missing = await readJsonFile<any>(pPath("missing_inputs.json"));
+      if (missing.blocking && missing.missing.length > 0) {
+        issues.push({ rule: "blocking_missing_inputs", message: `Project has ${missing.missing.length} blocking missing inputs.` });
+      }
+    } catch {}
+  }
+
+  // 10: Approvals
+  try {
+    if (await fileExists(pPath("approvals.json"))) {
+      const approvals = await readJsonFile<any>(pPath("approvals.json"));
+      const required = ["gpx_summary_approval", "claims_approval", "poi_approval", "concept_approval", "guide_outline_approval", "guide_final_approval"];
+      for (const r of required) {
+        if (!approvals.approvals.some((a: any) => a.stage === r && a.decision === "approved")) {
+          issues.push({ rule: `missing_approval_${r}`, message: `Required approval missing: ${r}` });
+        }
+      }
+    } else {
+      issues.push({ rule: "missing_approvals_file", message: "approvals.json is missing." });
+    }
+  } catch {}
+
   return issues;
 }

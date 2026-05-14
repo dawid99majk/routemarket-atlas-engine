@@ -1,0 +1,41 @@
+[
+  {
+    "id": "src_001",
+    "topicId": "golden-alps",
+    "url": "https://albania.al/destinations/theth/",
+    "title": "Official Albania Tourism - Theth",
+    "sourceType": "official",
+    "language": "en",
+    "relevanceScore": 95,
+    "trustScore": 100,
+    "licenseStatus": "safe",
+    "contentSummary": "Official guide to Theth National Park with trail details.",
+    "dateFound": "2026-05-14T00:00:00Z"
+  },
+  {
+    "id": "src_002",
+    "topicId": "golden-alps",
+    "url": "https://www.openstreetmap.org/relation/2533221",
+    "title": "OpenStreetMap Theth Data",
+    "sourceType": "map",
+    "language": "en",
+    "relevanceScore": 90,
+    "trustScore": 100,
+    "licenseStatus": "safe",
+    "contentSummary": "Comprehensive map data for the Theth-Valbona trail.",
+    "dateFound": "2026-05-14T00:00:00Z"
+  },
+  {
+    "id": "src_003",
+    "topicId": "golden-alps",
+    "url": "https://example.com/blog/theth-motorcycle",
+    "title": "Motorcycle Albania Blog",
+    "sourceType": "blog",
+    "language": "en",
+    "relevanceScore": 85,
+    "trustScore": 80,
+    "licenseStatus": "needs_review",
+    "contentSummary": "Detailed trip report for motorcycle travel in the Accursed Mountains.",
+    "dateFound": "2026-05-14T00:00:00Z"
+  }
+]

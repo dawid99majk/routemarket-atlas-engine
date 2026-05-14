@@ -13,6 +13,7 @@ export const MediaAssetSchema = z.object({
   locationStatus: z.enum(["gps_found", "matched_to_route", "unknown"]).optional(),
   approvalStatus: z.enum(["pending", "approved", "rejected"]).optional(),
   notes: z.string().optional(),
+  status: z.enum(["active", "duplicate", "unsupported"]).default("active"),
   createdAt: z.string()
 });
 

@@ -169,16 +169,27 @@ function createRoutes(): Route[] {
       // For simplicity, we assume we resume runMvp2. 
       // In a real system, we'd store the next step in the job context.
       const nextStepMap: Record<string, string> = {
-        "pois_approval": "concept",
-        "final_approval": "quality"
+        "gpx_summary_approval": "claims",
+        "claims_approval": "pois",
+        "poi_approval": "concept",
+        "concept_approval": "guide_outline",
+        "guide_outline_approval": "guide",
+        "guide_final_approval": "finalize"
       };
-      const nextStep = nextStepMap[job.currentStep ?? ""] ?? "claims";
+      const nextStep = nextStepMap[job.currentStep ?? ""] ?? "input";
 
       jobs.resume(params.id, body.approvalData, (update) => 
         service.runMvp2WithProgress(projectSlug, update, nextStep)
       );
 
       return { message: "Job resumed.", jobId: params.id, nextStep };
+    }),
+    route("GET", "/projects/:slug/missing-inputs", async ({ params, service }) => {
+      try {
+        return JSON.parse(await service.readProjectFile(params.slug, "missing_inputs.json"));
+      } catch {
+        return { missing: [] };
+      }
     }),
     route("POST", "/jobs/prune", async ({ req, jobs }) => {
       const body = PruneJobsBodySchema.parse(await readJson(req));

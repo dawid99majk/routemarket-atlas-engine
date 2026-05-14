@@ -42,6 +42,7 @@ export async function buildProjectReviewBundle(input: {
   artifacts: ProjectArtifact[];
   sources: Source[];
   claims: Claim[];
+  qualityIssues?: import("./quality-gates.js").QualityIssue[];
 }): Promise<ProjectReviewBundle> {
   const readiness = assessProjectReadiness(input);
   const events = await listProjectEvents(input.project.folderPath);
@@ -100,7 +101,12 @@ export async function saveProjectApprovalDecision(input: {
   notes?: string;
 }): Promise<void> {
   const path = join(input.project.folderPath, "approvals.json");
-  const approvals = await readJsonFile<any>(path);
+  let approvals;
+  try {
+    approvals = await readJsonFile<any>(path);
+  } catch {
+    approvals = { projectId: input.project.id, updatedAt: "", approvals: [] };
+  }
   
   const record = {
     stage: input.stage,
@@ -120,6 +126,40 @@ export async function saveProjectApprovalDecision(input: {
 
   approvals.updatedAt = record.decidedAt;
   await writeJsonFile(path, approvals);
+
+  // Side effects for hardening
+  if (input.decision === "approved") {
+    if (input.stage === "gpx_summary_approval") {
+      const summaryPath = join(input.project.folderPath, "route_summary.json");
+      try {
+        const summary = await readJsonFile<any>(summaryPath);
+        summary.validationStatus = "validated";
+        await writeJsonFile(summaryPath, summary);
+      } catch {}
+    } else if (input.stage === "poi_approval") {
+      const poiPath = join(input.project.folderPath, "poi.geojson");
+      try {
+        const geojson = await readJsonFile<any>(poiPath);
+        for (const feature of geojson.features) {
+          if (feature.properties.status === "suggested") {
+            feature.properties.status = "confirmed";
+          }
+        }
+        await writeJsonFile(poiPath, geojson);
+      } catch {}
+    } else if (input.stage === "claims_approval") {
+      const claimsPath = join(input.project.folderPath, "claims.json");
+      try {
+        const claims = await readJsonFile<any[]>(claimsPath);
+        for (const claim of claims) {
+          if (claim.status === "needs_creator_review" || claim.status === "uncertain") {
+            claim.status = "verified";
+          }
+        }
+        await writeJsonFile(claimsPath, claims);
+      } catch {}
+    }
+  }
 
   await appendProjectEvent(input.project.folderPath, {
     type: "review.approval",

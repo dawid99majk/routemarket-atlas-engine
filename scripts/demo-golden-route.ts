@@ -1,6 +1,6 @@
 import { AtlasWorkflowService } from "../packages/atlas-workflow/src/index.js";
 import { join } from "node:path";
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
 
 async function run() {
   const rootDir = process.cwd();
@@ -23,6 +23,17 @@ async function run() {
   const projectPath = join(rootDir, "routes", "the-golden-alps");
   await copyFile(join(rootDir, "fixtures", "golden-route", "route.gpx"), join(projectPath, "route.gpx"));
   await copyFile(join(rootDir, "fixtures", "golden-route", "notes.md"), join(projectPath, "notes.md"));
+  await copyFile(join(rootDir, "fixtures", "golden-route", "sources.json"), join(projectPath, "sources.json"));
+  
+  await writeFile(join(projectPath, "input_manifest.json"), JSON.stringify({
+    projectId: "the-golden-alps",
+    items: [
+      { id: "note_1", type: "note", originalName: "Albania Tips", path: "notes.md", status: "usable" }
+    ]
+  }, null, 2));
+  
+  await mkdir(join(projectPath, "input", "photos"), { recursive: true });
+  await writeFile(join(projectPath, "input", "photos", "cover.jpg"), "fake-image-content");
 
   // 3. Run Pipeline (Pause 1: GPX)
   console.log("\n[3/5] Running pipeline - Step: Input & GPX...");
@@ -30,21 +41,22 @@ async function run() {
   console.log(`Pipeline paused at: ${res.step}. Approving...`);
   await service.approveStage("the-golden-alps", "gpx_summary_approval", "approved");
 
-  // 4. Continue Pipeline (Pause 2: Claims)
-  console.log("\n[4/5] Running pipeline - Step: Claims...");
-  res = await service.runMvp2WithProgress("the-golden-alps", undefined, "claims");
-  console.log(`Pipeline paused at: ${res.step}. Approving...`);
-  await service.approveStage("the-golden-alps", "claims_approval", "approved");
-
-  // 5. Finalize
-  console.log("\n[5/5] Finalizing pipeline...");
-  await service.approveStage("the-golden-alps", "poi_approval", "approved");
-  await service.approveStage("the-golden-alps", "concept_approval", "approved");
-  await service.approveStage("the-golden-alps", "guide_outline_approval", "approved");
-  await service.approveStage("the-golden-alps", "guide_final_approval", "approved");
-  await service.approveStage("the-golden-alps", "media_approval", "approved");
-
-  res = await service.runMvp2WithProgress("the-golden-alps", undefined, "finalize");
+  // 4. Continue Pipeline (Wait for all approvals)
+  console.log("\n[4/5] Running pipeline and approving stages...");
+  const autoApprover = async () => {
+    while (true) {
+      res = await service.runMvp2WithProgress("the-golden-alps");
+      if (res.status === "completed") break;
+      if (res.status === "paused") {
+        const stageToApprove = (res as any).stage || res.step;
+        console.log(`Auto-approving: ${stageToApprove}`);
+        await service.approveStage("the-golden-alps", stageToApprove, "approved");
+      } else {
+        break;
+      }
+    }
+  };
+  await autoApprover();
   
   console.log("\n--- DEMO COMPLETED ---");
   console.log(`Project ready: routes/the-golden-alps`);

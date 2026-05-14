@@ -3,9 +3,23 @@ import { join } from "node:path";
 import type { RouteProject } from "../../atlas-core/src/index.js";
 
 export async function writeReviewChecklist(project: RouteProject): Promise<string> {
-  const checklist = `# Review Checklist
+  const { checkQualityGates } = await import("../../atlas-workflow/src/quality-gates.js");
+  const issues = await checkQualityGates(project);
+  
+  let header = "# Review Checklist\n\n";
+  
+  if (issues.length > 0) {
+    header += "## ❌ PUBLISH BLOCKED\n\n";
+    header += "The following quality gates failed:\n\n";
+    for (const issue of issues) {
+      header += `- [ ] **${issue.rule}**: ${issue.message}\n`;
+    }
+    header += "\n---\n\n";
+  } else {
+    header += "## ✅ QUALITY GATES PASSED\n\nReady for final review.\n\n---\n\n";
+  }
 
-## Research
+  const checklist = `${header}## Research
 
 - [ ] At least 3 useful sources collected
 - [ ] Official/local source checked

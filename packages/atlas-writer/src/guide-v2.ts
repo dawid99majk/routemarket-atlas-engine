@@ -1,112 +1,132 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { 
-  readJsonFile, 
-  type RouteProject, 
-  type ResearchPack, 
-  type RouteSummary, 
-  type Claim, 
-  type Poi 
+import {
+  readJsonFile,
+  type Claim,
+  type Poi,
+  type RouteProject,
+  type RouteSummary,
+  type Approvals,
+  type MissingInputs,
+  type MissingInputItem
 } from "../../atlas-core/src/index.js";
 
 export async function writeGuideOutline(project: RouteProject): Promise<string> {
-  const summary = await readRouteSummary(project);
-  const pack = await readResearchPack(project);
-  
-  const outline = `# Outline: ${project.title}
-
-## 1. Quick Facts
-- Distance: ${summary?.distanceKm || "TBD"} km
-- Elevation: ${summary?.elevationGainM || "TBD"} m
-- Difficulty: ${summary?.difficulty || "TBD"}
-- Season: ${summary?.season || "TBD"}
-
-## 2. Target Audience
-- Who is this for? (based on ${project.category})
-
-## 3. Route Narrative
-- Why this route?
-- Key highlights from research pack (${pack?.materials.length || 0} materials)
-
-## 4. Logical Segments
-- Segment 1: ...
-- Segment 2: ...
-
-## 5. POI List
-- List of confirmed POI candidates
-
-## 6. Safety & Logistics
-- Key risks
-- Water/Fuel availability
-`;
-
+  const outline = `# Outline for ${project.title}
+1. Introduction
+2. Key Highlights
+3. Route Details
+4. Preparation
+5. Conclusion`;
   await writeFile(join(project.folderPath, "guide_outline.md"), outline, "utf8");
   return outline;
 }
 
-export async function generateGuideV2(project: RouteProject): Promise<string> {
+export async function generateGuideDraft(input: { project: RouteProject; sources?: any[]; concept?: string }): Promise<string> {
+  // Legacy method for MVP1 compatibility
+  const guide = `# ${input.project.title} (Draft)`;
+  await writeFile(join(input.project.folderPath, "guide.md"), guide, "utf8");
+  return guide;
+}
+
+export async function generateGuideV2(project: RouteProject): Promise<string | undefined> {
   const summary = await readRouteSummary(project);
   const pack = await readResearchPack(project);
   const claims = await readClaims(project);
   const pois = await readPois(project);
   const concept = await readConcept(project);
+  const approvals = await readApprovals(project);
+
+  // Validate inputs
+  const missing: MissingInputItem[] = [];
+  
+  if (!summary) {
+    missing.push({ code: "missing_route_summary", message: "route_summary.json is missing.", requiredFor: "guide_final" });
+  } else {
+    if (summary.distanceKm === undefined || summary.distanceKm <= 0) {
+      missing.push({ code: "invalid_distance", message: "Route distance must be greater than 0.", requiredFor: "guide_final" });
+    }
+    if (summary.validationStatus === "needs_validation") {
+      missing.push({ code: "needs_gpx_validation", message: "GPX summary needs human approval.", requiredFor: "guide_final" });
+    }
+  }
+  
+  if (!pack || pack.materials.length === 0) {
+    missing.push({ code: "missing_research", message: "Research pack is missing or empty.", requiredFor: "guide_final" });
+  }
+
+  const verifiedClaims = claims.filter(c => c.status === "verified" || c.status === "likely");
+  if (claims.length < 3 || verifiedClaims.length < 2) {
+    missing.push({ code: "insufficient_claims", message: "At least 3 claims (min 2 verified/likely) required.", requiredFor: "guide_final" });
+  }
+
+  const outlineApproved = approvals?.approvals.some((a: any) => a.stage === "guide_outline_approval" && a.decision === "approved");
+  if (!outlineApproved) {
+    missing.push({ code: "missing_outline_approval", message: "Guide outline must be approved before final guide generation.", requiredFor: "guide_final" });
+  }
+
+  if (missing.length > 0) {
+    const missingInputs: MissingInputs = {
+      projectId: project.id,
+      generatedAt: new Date().toISOString(),
+      blocking: true,
+      missing
+    };
+    await writeFile(join(project.folderPath, "missing_inputs.json"), JSON.stringify(missingInputs, null, 2), "utf8");
+    console.warn(`Guide generation blocked by missing inputs for project ${project.id}`);
+    return undefined;
+  }
+
+  // Clear missing inputs if fixed
+  try {
+    const { unlink } = await import("node:fs/promises");
+    await unlink(join(project.folderPath, "missing_inputs.json"));
+  } catch {}
 
   const guide = `# ${project.title}
 
 ## Quick facts
-- **Distance**: ${summary?.distanceKm || "Unknown"} km
-- **Elevation gain**: ${summary?.elevationGainM || "Unknown"} m
-- **Duration**: ${summary?.estimatedTimeH || "Unknown"} hours
-- **Difficulty**: ${summary?.difficulty || "Moderate"}
-- **Best season**: ${summary?.season || "May - October"}
-- **Start / finish**: ${summary?.startPoint || "Unknown"} / ${summary?.endPoint || "Unknown"}
-- **Surface**: ${summary?.surfaceType || "Mixed"}
-- **Risk level**: ${summary?.riskLevel || "Low"}
+- Distance: ${summary!.distanceKm} km
+- Elevation: ${summary!.elevationGainM} m
+- Surface: ${summary!.surfaceType}
 
-## Who is this route for?
-This ${project.category} route in ${project.region} is designed for adventurers seeking ${project.title}.
+## Overview
+${concept || "This route covers..."}
 
-## Why this route is worth doing
-${concept || "This route offers a unique combination of scenery and challenge."}
+## Detailed Points
+${pois.map(p => `### ${p.name}\n${p.description}`).join("\n\n")}
 
-## Route overview
-${pack?.materials.find(m => m.type === "note")?.content.slice(0, 500) || "Based on collected research, this route covers key highlights of the region."}
-
-## Key POI
-${pois.map(p => `- **${p.name}** (${p.type}): ${p.description}`).join("\n")}
-
-## Logistics
-- **Water**: ${claims.find(c => c.claimType === "logistics" && c.claim.toLowerCase().includes("water"))?.claim || "Plan ahead for water stops."}
-- **Access**: ${claims.find(c => c.claimType === "access")?.claim || "Check local access rules before departure."}
-
-## Safety and risks
-${claims.filter(c => c.claimType === "safety").map(c => `- ${c.claim}`).join("\n") || "Standard outdoor safety rules apply."}
-
-## Disclaimer
-This guide is generated based on research data and GPX analysis. Always check current local conditions.
+## Tips
+${claims.filter(c => c.status === "verified").map(c => `- ${c.claim}`).join("\n")}
 `;
 
-  // Filter forbidden phrases
-  const filteredGuide = guide
-    .replace(/needs validation/gi, "verified")
-    .replace(/needs review/gi, "reviewed")
-    .replace(/not yet validated/gi, "validated")
-    .replace(/pending/gi, "complete");
-
-  await writeFile(join(project.folderPath, "guide.md"), filteredGuide, "utf8");
-  return filteredGuide;
+  await writeFile(join(project.folderPath, "guide.md"), guide, "utf8");
+  return guide;
 }
 
+// Helpers
 async function readRouteSummary(project: RouteProject): Promise<RouteSummary | undefined> {
-  try { return await readJsonFile<RouteSummary>(join(project.folderPath, "route_summary.json")); } catch { return undefined; }
+  try {
+    return await readJsonFile<RouteSummary>(join(project.folderPath, "route_summary.json"));
+  } catch {
+    return undefined;
+  }
 }
 
-async function readResearchPack(project: RouteProject): Promise<ResearchPack | undefined> {
-  try { return await readJsonFile<ResearchPack>(join(project.folderPath, "research_pack.json")); } catch { return undefined; }
+async function readResearchPack(project: RouteProject): Promise<any> {
+  try {
+    return await readJsonFile<any>(join(project.folderPath, "research_pack.json"));
+  } catch {
+    return undefined;
+  }
 }
 
 async function readClaims(project: RouteProject): Promise<Claim[]> {
-  try { return await readJsonFile<Claim[]>(join(project.folderPath, "claims.json")); } catch { return []; }
+  try {
+    return await readJsonFile<Claim[]>(join(project.folderPath, "claims.json"));
+  } catch {
+    return [];
+  }
 }
 
 async function readPois(project: RouteProject): Promise<Poi[]> {
@@ -114,14 +134,25 @@ async function readPois(project: RouteProject): Promise<Poi[]> {
     const geojson = await readJsonFile<any>(join(project.folderPath, "poi.geojson"));
     return geojson.features.map((f: any) => ({
       name: f.properties.name,
-      type: f.properties.type,
-      description: f.properties.description,
-      lat: f.geometry.coordinates[1],
-      lng: f.geometry.coordinates[0]
+      description: f.properties.description
     }));
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 async function readConcept(project: RouteProject): Promise<string | undefined> {
-  try { return await readFile(join(project.folderPath, "route_concept.md"), "utf8"); } catch { return undefined; }
+  try {
+    return await readFile(join(project.folderPath, "route_concept.md"), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+async function readApprovals(project: RouteProject): Promise<Approvals | undefined> {
+  try {
+    return await readJsonFile<Approvals>(join(project.folderPath, "approvals.json"));
+  } catch {
+    return undefined;
+  }
 }

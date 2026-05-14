@@ -30,17 +30,18 @@ export async function extractPois(project: RouteProject): Promise<Poi[]> {
     pois: uniquePois
   });
 
-  // 5. Save to GeoJSON (only those with coordinates)
+  // 5. Save to GeoJSON (only those with coordinates and not rejected)
   const geojson = {
     type: "FeatureCollection",
     features: uniquePois
-      .filter(p => p.lat !== 0 && p.lng !== 0)
+      .filter(p => p.lat !== 0 && p.lng !== 0 && p.status !== "rejected")
       .map((poi) => ({
         type: "Feature",
         properties: {
           id: poi.id,
           name: poi.name,
           type: poi.type,
+          status: poi.status,
           description: poi.description,
           fun_fact: poi.funFact,
           contactPhone: poi.contactPhone,
@@ -86,6 +87,7 @@ async function extractFromGpx(project: RouteProject): Promise<Poi[]> {
         lat,
         lng,
         description: descMatch ? descMatch[1] : "",
+        status: "suggested",
         sortOrder: pois.length
       });
     }
@@ -117,6 +119,7 @@ async function extractFromResearch(project: RouteProject): Promise<Poi[]> {
           contactPhone: p.contactPhone,
           website: p.website,
           isVerifiedByDeepResearch: true,
+          status: "suggested",
           sortOrder: index
         });
       });
@@ -127,11 +130,30 @@ async function extractFromResearch(project: RouteProject): Promise<Poi[]> {
 }
 
 function deduplicatePois(pois: Poi[]): Poi[] {
-  const seen = new Set<string>();
-  return pois.filter(p => {
-    const key = `${p.name.toLowerCase()}_${p.lat.toFixed(4)}_${p.lng.toFixed(4)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const result: Poi[] = [];
+  for (const poi of pois) {
+    const isDuplicate = result.some(p => {
+      const nameMatch = p.name.toLowerCase() === poi.name.toLowerCase();
+      const dist = p.lat !== 0 && poi.lat !== 0 ? haversineDistance(p.lat, p.lng, poi.lat, poi.lng) : 1000;
+      return nameMatch || dist < 0.05; // 50 meters
+    });
+    if (!isDuplicate) {
+      result.push({
+        ...poi,
+        status: poi.status || "suggested"
+      });
+    }
+  }
+  return result;
+}
+
+function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }

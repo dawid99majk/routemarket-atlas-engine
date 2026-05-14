@@ -268,13 +268,13 @@ async function postJson(url: string, body: unknown): Promise<any> {
 }
 
 async function waitForJob(client: AtlasClient, jobId: string): Promise<any> {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     const current = await client.getJob(jobId);
     if (["completed", "failed"].includes(current.job.status)) return current;
     if (current.job.status === "waiting_for_approval") {
       await client.approveJob(jobId, {});
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("Timed out waiting for job.");
 }

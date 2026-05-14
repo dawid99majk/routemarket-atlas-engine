@@ -25,6 +25,7 @@ export function assessProjectReadiness(input: {
   artifacts: ProjectArtifact[];
   sources: Source[];
   claims: Claim[];
+  qualityIssues?: import("./quality-gates.js").QualityIssue[];
 }): ReadinessReport {
   const artifactExists = (path: string) => input.artifacts.some((artifact) => artifact.path === path && artifact.exists);
   const guide = input.artifacts.find((artifact) => artifact.path === "guide.md");
@@ -39,7 +40,8 @@ export function assessProjectReadiness(input: {
     check("review-checklist", "Review checklist present", artifactExists("review_checklist.md"), "warning", "Review checklist should be present."),
     check("deep-research", "Deep research completed", artifactExists("deep_research.json"), "info", "Run deep research to enrich source intelligence."),
     check("payload-prepared", "RouteMarket payload prepared", routePayload, "warning", "Prepare payload before handoff."),
-    check("status-ready", "Project is ready for review", input.project.status === "ready_for_review", "warning", `Current status: ${input.project.status}`)
+    check("status-ready", "Project is ready for review", input.project.status === "ready_for_review", "warning", `Current status: ${input.project.status}`),
+    ...(input.qualityIssues || []).map(issue => check(`quality-${issue.rule}`, `Quality: ${issue.rule}`, false, "blocking", issue.message))
   ];
 
   const blockingCount = checks.filter((item) => !item.passed && item.severity === "blocking").length;

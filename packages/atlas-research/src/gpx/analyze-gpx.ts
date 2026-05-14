@@ -4,7 +4,8 @@ import {
   readJsonFile, 
   writeJsonFile, 
   type RouteProject, 
-  type RouteSummary 
+  type RouteSummary,
+  type MissingInputs
 } from "../../../atlas-core/src/index.js";
 
 type GpxPoint = {
@@ -47,18 +48,36 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
 
   const stats = calculateStats(points);
   
+  if (stats.distanceKm < 0.5) {
+    const missing: MissingInputs = {
+      projectId: project.id,
+      generatedAt: now,
+      blocking: true,
+      missing: [{
+        code: "gpx_too_short",
+        message: `GPX track is too short (${stats.distanceKm.toFixed(2)} km). Minimum 1km recommended for Atlas guides.`,
+        requiredFor: "guide_final"
+      }]
+    };
+    await writeJsonFile(join(project.folderPath, "missing_inputs.json"), missing);
+    throw new Error(`GPX too short: ${stats.distanceKm.toFixed(2)} km`);
+  }
+
   const summary: RouteSummary = {
     distanceKm: Math.round(stats.distanceKm * 10) / 10,
     elevationGainM: Math.round(stats.elevationGainM),
-    estimatedTimeH: Math.round((stats.distanceKm / 15) * 10) / 10, // Default 15km/h for motorcycle/cycling?
+    estimatedTimeH: Math.round((stats.distanceKm / 15) * 10) / 10,
     difficulty: inferDifficulty(stats),
-    riskLevel: "low",
+    riskLevel: "unknown",
     loopType: stats.isLoop ? "loop" : "point_to_point",
     season: "May-October",
-    startPoint: `${points[0].lat.toFixed(5)}, ${points[0].lon.toFixed(5)}`,
-    endPoint: `${points[points.length - 1].lat.toFixed(5)}, ${points[points.length - 1].lon.toFixed(5)}`,
+    startPoint: `Start in ${project.region} (lat: ${points[0].lat.toFixed(3)})`,
+    endPoint: stats.isLoop ? "Back to start" : `End in ${project.region} (lat: ${points[points.length - 1].lat.toFixed(3)})`,
     surfaceType: "mixed",
-    validationStatus: "draft",
+    hasElevation: stats.hasElevation,
+    hasTime: stats.hasTime,
+    isLoop: stats.isLoop,
+    validationStatus: "needs_validation",
     updatedAt: now
   };
 
@@ -125,8 +144,10 @@ function calculateStats(points: GpxPoint[]) {
   const end = points[points.length - 1];
   const startEndDist = haversineDistance(start.lat, start.lon, end.lat, end.lon);
   const isLoop = startEndDist < 0.5 || startEndDist < distanceKm * 0.05;
+  const hasElevation = points.some(p => p.ele !== undefined);
+  const hasTime = points.some(p => p.time !== undefined);
 
-  return { distanceKm, elevationGainM, isLoop, elevationProfile };
+  return { distanceKm, elevationGainM, isLoop, hasElevation, hasTime, elevationProfile };
 }
 
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {

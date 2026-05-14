@@ -5,7 +5,9 @@ import {
   type RouteProject, 
   type Claim, 
   type ResearchPack, 
-  type RouteSummary 
+  type RouteSummary,
+  type MissingInputs,
+  type MissingInputItem
 } from "../../../atlas-core/src/index.js";
 
 export async function generateClaims(project: RouteProject): Promise<Claim[]> {
@@ -60,20 +62,24 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
   try {
     const pack = await readJsonFile<ResearchPack>(researchPackPath);
     for (const material of pack.materials) {
-      if (material.type === "deep_research" || material.trustLevel === "creator") {
-        // Here we would normally use an LLM to extract real facts.
-        // For MVP, we'll extract some "potential" facts or keep it simple.
-        // If it's a creator note, it's a high confidence fact.
-        if (material.trustLevel === "creator") {
-           claims.push({
-            id: `claim_creator_${material.id}_${Date.now()}`,
+      if (material.trustLevel === "creator") {
+        const sentences = material.content.split(/[.!?]\s+/);
+        for (const sentence of sentences) {
+          const cleanSentence = sentence.trim();
+          if (cleanSentence.length < 40) continue;
+
+          const claimType = classifySentence(cleanSentence);
+          if (!claimType) continue;
+
+          claims.push({
+            id: `claim_creator_h_${Math.random().toString(36).slice(2, 9)}`,
             topicId: project.id,
-            claim: `Creator note: ${material.title} provides authoritative details about the route.`,
-            claimType: "logistics",
-            confidence: 1.0,
-            status: "verified",
+            claim: cleanSentence,
+            claimType: claimType as any,
+            confidence: 0.75,
+            status: "needs_creator_review",
             sources: [material.id],
-            needsHumanReview: false
+            needsHumanReview: true
           });
         }
       }
@@ -83,21 +89,40 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
   }
 
   // 3. Fallback / Quality Gate check
-  if (claims.length === 0) {
-    claims.push({
-      id: `claim_missing_${Date.now()}`,
-      topicId: project.id,
-      claim: "Missing input materials to generate meaningful route claims.",
-      claimType: "legal",
-      confidence: 1.0,
-      status: "needs_creator_review",
-      sources: [],
-      needsHumanReview: true
-    });
+  const contentClaims = claims.filter(c => !c.id.startsWith("claim_tech_"));
+  if (contentClaims.length === 0) {
+     const missing: MissingInputs = {
+      projectId: project.id,
+      generatedAt: now,
+      blocking: true,
+      missing: [{
+        code: "insufficient_claims",
+        message: "No meaningful claims could be extracted from input materials.",
+        requiredFor: "guide_final"
+      }]
+    };
+    await writeJsonFile(join(project.folderPath, "missing_inputs.json"), missing);
+  } else {
+    // Clear missing inputs if fixed
+    try {
+      const { unlink } = await import("node:fs/promises");
+      await unlink(join(project.folderPath, "missing_inputs.json"));
+    } catch {}
   }
 
   await writeJsonFile(claimsPath, claims);
   return claims;
+}
+
+function classifySentence(s: string): string | undefined {
+  const low = s.toLowerCase();
+  if (/\b(water|fuel|food|parking|ferry|border|hotel|campsite)\b/.test(low)) return "logistics";
+  if (/\b(danger|risk|avalanche|flood|closed|police|theft|exposed)\b/.test(low)) return "safety";
+  if (/\b(asphalt|gravel|offroad|paved|mud|sand)\b/.test(low)) return "surface";
+  if (/\b(season|snow|winter|summer|rain|heat)\b/.test(low)) return "season";
+  if (/\b(permit|legal|allowed|forbidden|access)\b/.test(low)) return "access";
+  if (/\b(km|kilometers|distance|elevation|climb)\b/.test(low)) return "distance";
+  return undefined;
 }
 
 async function readExistingNonGeneratedClaims(project: RouteProject): Promise<Claim[]> {
@@ -106,8 +131,10 @@ async function readExistingNonGeneratedClaims(project: RouteProject): Promise<Cl
     // Filter out old placeholder claims
     return existing.filter((claim) => 
       !claim.claim.includes("may contain useful route intelligence") &&
+      !claim.claim.includes("provides authoritative details") &&
       !claim.id.startsWith("claim_tech_") &&
-      !claim.id.startsWith("claim_missing_")
+      !claim.id.startsWith("claim_missing_") &&
+      !claim.id.startsWith("claim_creator_h_")
     );
   } catch {
     return [];

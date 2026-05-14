@@ -25,13 +25,13 @@ ${targetTraveler(input.project.category)}
 
 ## Proposed structure
 
-- Start: needs validation
-- Finish: needs validation
-- Distance: needs GPX validation
-- Elevation gain: needs GPX validation
-- Difficulty: needs human review
-- Surface: needs source confirmation
-- Best season: needs source confirmation
+- Start: to be confirmed
+- Finish: to be confirmed
+- Distance: to be confirmed
+- Elevation gain: to be confirmed
+- Difficulty: to be confirmed
+- Surface: to be confirmed
+- Best season: to be confirmed
 
 ## Key research basis
 

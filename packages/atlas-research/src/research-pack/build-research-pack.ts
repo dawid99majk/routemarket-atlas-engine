@@ -17,8 +17,8 @@ export async function buildResearchPack(project: RouteProject): Promise<Research
   const sourcesPath = join(project.folderPath, "sources.json");
   const researchPackPath = join(project.folderPath, "research_pack.json");
 
-  const manifest = await readJsonFile<InputManifest>(manifestPath);
-  const webSources = await readJsonFile<Source[]>(sourcesPath);
+  const manifest = await readJsonFile<InputManifest>(manifestPath).catch(() => ({ items: [] } as InputManifest));
+  const webSources = await readJsonFile<Source[]>(sourcesPath).catch(() => [] as Source[]);
 
   const materials: ResearchMaterial[] = [];
 
@@ -86,6 +86,8 @@ export async function buildResearchPack(project: RouteProject): Promise<Research
     // Ignore if no deep research
   }
 
+  const finalMaterials = deduplicateAndValidateMaterials(materials);
+
   const pack: ResearchPack = {
     projectId: project.id,
     topic: project.title,
@@ -93,11 +95,43 @@ export async function buildResearchPack(project: RouteProject): Promise<Research
     region: project.region,
     language: project.language,
     updatedAt: now,
-    materials
+    materials: finalMaterials,
+    summary: {
+      total: finalMaterials.length,
+      active: finalMaterials.filter(m => m.status === "active").length,
+      unsupported: finalMaterials.filter(m => m.status === "unsupported").length,
+      duplicate: finalMaterials.filter(m => m.status === "duplicate").length
+    }
   };
 
   await writeJsonFile(researchPackPath, pack);
   return pack;
+}
+
+function deduplicateAndValidateMaterials(materials: ResearchMaterial[]): ResearchMaterial[] {
+  const seenUrls = new Set<string>();
+  const seenHashes = new Set<string>();
+  
+  return materials.map(m => {
+    // 1. Check for duplicates
+    if (m.sourceUrl && seenUrls.has(m.sourceUrl)) {
+      return { ...m, status: "duplicate" as any };
+    }
+    if (m.sourceUrl) seenUrls.add(m.sourceUrl);
+
+    const hash = m.content.slice(0, 500); // Simple hash
+    if (seenHashes.has(hash)) {
+      return { ...m, status: "duplicate" as any };
+    }
+    seenHashes.add(hash);
+
+    // 2. Check for unsupported (too thin)
+    if (m.type !== "link" && m.content.length < 200) {
+      return { ...m, status: "unsupported" as any };
+    }
+
+    return { ...m, status: "active" as any };
+  });
 }
 
 function inferTrustLevel(sourceType: string): ResearchTrustLevel {

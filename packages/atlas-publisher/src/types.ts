@@ -22,6 +22,7 @@ export type RouteMarketDraftPayload = {
   surface_type?: string;
   tags?: string[];
   ai_assisted: boolean;
+  is_verified?: boolean;
 };
 
 export type PreparedRouteMarketDraft = {
