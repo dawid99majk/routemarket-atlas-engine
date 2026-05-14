@@ -1,8 +1,8 @@
 import { join } from "node:path";
-import type { RouteProject } from "../models/route-project.js";
+import type { RouteProject, ProjectStatus } from "../models/route-project.js";
 import { readJsonFile, writeJsonFile } from "../storage/json.js";
 
-export async function updateProjectStatus(project: RouteProject, status: string): Promise<RouteProject> {
+export async function updateProjectStatus(project: RouteProject, status: ProjectStatus): Promise<RouteProject> {
   const updated: RouteProject = {
     ...project,
     status,

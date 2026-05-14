@@ -1,10 +1,17 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { RouteProject } from "../models/route-project.js";
 import { RouteProjectSchema } from "../models/route-project.js";
 import { routesPath } from "../storage/paths.js";
 import { writeJsonFile } from "../storage/json.js";
 import { slugify } from "./slug.js";
+
+export class ProjectAlreadyExistsError extends Error {
+  constructor(public readonly slug: string) {
+    super(`Project with slug '${slug}' already exists.`);
+    this.name = "ProjectAlreadyExistsError";
+  }
+}
 
 export type CreateRouteProjectInput = {
   rootDir: string;
@@ -19,6 +26,15 @@ export async function createRouteProject(input: CreateRouteProjectInput): Promis
   const now = new Date().toISOString();
   const slug = slugify(input.title);
   const folderPath = routesPath(input.rootDir, slug);
+  const projectJsonPath = join(folderPath, "project.json");
+
+  try {
+    await stat(projectJsonPath);
+    throw new ProjectAlreadyExistsError(slug);
+  } catch (err: any) {
+    if (err.name === "ProjectAlreadyExistsError") throw err;
+    if (err.code !== "ENOENT") throw err;
+  }
 
   const project = RouteProjectSchema.parse({
     id: slug,

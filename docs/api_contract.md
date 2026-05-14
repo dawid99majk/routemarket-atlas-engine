@@ -292,6 +292,8 @@ Returns only job log entries.
 
 Writes `routemarket_payload.json`.
 
+**Note:** This endpoint is protected by Quality Gates and will return HTTP 422 `quality_gate_failed` with a list of issues if the project does not meet strict quality thresholds (e.g., sufficient sources, valid POIs, no placeholder text).
+
 ### GET /projects/:slug/files?path=guide.md
 
 Reads an allowed project file. Only safe known project artifacts are readable.

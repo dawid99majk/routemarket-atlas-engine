@@ -21,7 +21,9 @@ export const ClaimSchema = z.object({
     "conflicting",
     "unsafe_to_publish"
   ]),
-  sources: z.array(z.string())
+  sources: z.array(z.string()),
+  evidenceQuotes: z.array(z.string()).optional(),
+  needsHumanReview: z.boolean().default(false)
 });
 
 export type Claim = z.infer<typeof ClaimSchema>;

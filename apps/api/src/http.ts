@@ -10,6 +10,7 @@ import {
   ArchiveProjectBodySchema,
   CollectSourcesBodySchema,
   DeepResearchBodySchema,
+  JobApprovalBodySchema,
   PruneJobsBodySchema,
   SubmitReviewDecisionBodySchema,
   UpdateProjectStatusBodySchema,
@@ -57,7 +58,7 @@ export function createAtlasApiServer(options: AtlasApiOptions): Server {
 
   return createServer(async (req, res) => {
     const startedAt = Date.now();
-    setCorsHeaders(res, corsOrigin);
+    setCorsHeaders(res, corsOrigin, req.headers.origin as string | undefined);
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -148,9 +149,37 @@ function createRoutes(): Route[] {
     }),
     route("POST", "/projects/:slug/jobs/run-mvp2", async ({ req, params, service, jobs }) => {
       EmptyBodySchema.parse(await readJson(req));
-      return { job: jobs.start(`run-mvp2:${params.slug}`, (update) => service.runMvp2WithProgress(params.slug, update)) };
+      return { job: jobs.start(`run-mvp2:${params.slug}`, (update) => service.runMvp2WithProgress(params.slug, update), params.slug) };
     }),
     route("GET", "/jobs", async ({ jobs }) => ({ jobs: jobs.list() })),
+    route("GET", "/jobs/pending-approvals", async ({ jobs }) => ({
+      jobs: jobs.list().filter(j => j.status === "waiting_for_approval")
+    })),
+    route("POST", "/jobs/:id/approve", async ({ req, params, jobs, service }) => {
+      const body = JobApprovalBodySchema.parse(await readJson(req));
+      const job = jobs.get(params.id);
+      if (!job) throw notFound("Job not found.");
+      if (job.status !== "waiting_for_approval") throw badRequest("Job is not waiting for approval.");
+
+      // Resume logic
+      const projectSlug = job.type.split(":")[1];
+      if (!projectSlug) throw badRequest("Invalid job type for approval.");
+
+      // Next step logic: we need to know what the next step is.
+      // For simplicity, we assume we resume runMvp2. 
+      // In a real system, we'd store the next step in the job context.
+      const nextStepMap: Record<string, string> = {
+        "pois_approval": "concept",
+        "final_approval": "quality"
+      };
+      const nextStep = nextStepMap[job.currentStep ?? ""] ?? "claims";
+
+      jobs.resume(params.id, body.approvalData, (update) => 
+        service.runMvp2WithProgress(projectSlug, update, nextStep, body.approvalData)
+      );
+
+      return { message: "Job resumed.", jobId: params.id, nextStep };
+    }),
     route("POST", "/jobs/prune", async ({ req, jobs }) => {
       const body = PruneJobsBodySchema.parse(await readJson(req));
       return jobs.prune({ olderThanMs: body.olderThanMs });
@@ -214,8 +243,16 @@ async function readJson(req: IncomingMessage): Promise<any> {
   }
 }
 
-function setCorsHeaders(res: ServerResponse, corsOrigin: string): void {
-  res.setHeader("Access-Control-Allow-Origin", corsOrigin);
+function setCorsHeaders(res: ServerResponse, corsOrigin: string, reqOrigin?: string): void {
+  if (corsOrigin === "*") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  } else {
+    const allowed = corsOrigin.split(",").map((s) => s.trim());
+    if (reqOrigin && allowed.includes(reqOrigin)) {
+      res.setHeader("Access-Control-Allow-Origin", reqOrigin);
+      res.setHeader("Vary", "Origin");
+    }
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Atlas-API-Token");
 }
@@ -225,7 +262,40 @@ function sendJson(res: ServerResponse, statusCode: number, body: unknown): void 
   res.end(`${JSON.stringify(body, null, 2)}\n`);
 }
 
+import { ZodError } from "zod";
+import { QualityGateError } from "../../../packages/atlas-workflow/src/index.js";
+
 function sendError(res: ServerResponse, error: unknown): void {
+  if (error instanceof ZodError) {
+    sendJson(res, 400, {
+      error: "Validation failed.",
+      code: "validation_error",
+      details: error.issues
+    });
+    return;
+  }
+  if (error && typeof error === "object" && "name" in error && error.name === "JobAlreadyRunningError") {
+    sendJson(res, 409, {
+      error: (error as Error).message,
+      code: "job_conflict"
+    });
+    return;
+  }
+  if (error && typeof error === "object" && "name" in error && error.name === "ProjectAlreadyExistsError") {
+    sendJson(res, 409, {
+      error: (error as Error).message,
+      code: "conflict"
+    });
+    return;
+  }
+  if (error && typeof error === "object" && "name" in error && error.name === "QualityGateError") {
+    sendJson(res, 422, {
+      error: (error as QualityGateError).message,
+      code: "quality_gate_failed",
+      details: (error as QualityGateError).issues
+    });
+    return;
+  }
   if (error instanceof HttpError) {
     sendJson(res, error.statusCode, { error: error.message, code: error.code });
     return;

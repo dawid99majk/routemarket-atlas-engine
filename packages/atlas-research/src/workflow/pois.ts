@@ -62,15 +62,5 @@ function defaultPois(project: RouteProject): Poi[] {
     ];
   }
 
-  return [
-    {
-      id: "poi_001",
-      name: `${project.region} main route area`,
-      type: "other",
-      lat: 0,
-      lng: 0,
-      description: "Placeholder POI. Replace with map-verified coordinates.",
-      sortOrder: 0
-    }
-  ];
+  return [];
 }

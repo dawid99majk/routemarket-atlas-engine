@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ProjectStatusSchema } from "../../../packages/atlas-core/src/index.js";
 
 export const DiscoverBodySchema = z.object({
   category: z.string().min(1),
@@ -26,7 +27,7 @@ export const DeepResearchBodySchema = z.object({
 });
 
 export const UpdateProjectStatusBodySchema = z.object({
-  status: z.string().min(1)
+  status: ProjectStatusSchema
 });
 
 export const SubmitReviewDecisionBodySchema = z.object({
@@ -37,6 +38,10 @@ export const SubmitReviewDecisionBodySchema = z.object({
 
 export const WriteProjectFileBodySchema = z.object({
   content: z.string()
+});
+
+export const JobApprovalBodySchema = z.object({
+  approvalData: z.any().optional()
 });
 
 export const PruneJobsBodySchema = z.object({

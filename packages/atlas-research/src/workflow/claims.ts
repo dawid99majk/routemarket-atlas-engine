@@ -13,7 +13,8 @@ export async function generateClaims(project: RouteProject, sources: Source[]): 
       claimType: source.sourceType === "official" ? "logistics" : "route_segment",
       confidence: source.trustScore >= 75 ? 0.65 : 0.45,
       status: "uncertain",
-      sources: [source.id]
+      sources: [source.id],
+      needsHumanReview: false
     });
   });
 

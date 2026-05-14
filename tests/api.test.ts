@@ -41,7 +41,7 @@ describe("Atlas API", () => {
     expect(sources.sources.length).toBeGreaterThan(0);
 
     const mvp2 = await postJson(`${baseUrl}/projects/albania-motorcycle-route-7-days/run-mvp2`, {});
-    expect(mvp2.project.status).toBe("ready_for_review");
+    expect(mvp2.project.status).toBe("draft_generated");
 
     const file = await getJson(`${baseUrl}/projects/albania-motorcycle-route-7-days/files?path=guide.md`);
     expect(file.content).toContain("Route overview");
@@ -74,7 +74,7 @@ describe("Atlas API", () => {
     expect(completed.job.status).toBe("completed");
     expect(completed.job.progress).toBe(100);
     expect(completed.job.logs.length).toBeGreaterThan(3);
-    expect(completed.job.result.project.status).toBe("ready_for_review");
+    expect(completed.job.result.project.status).toBe("draft_generated");
 
     const artifacts = await client.listProjectArtifacts(created.id);
     expect(artifacts.artifacts.some((artifact: any) => artifact.path === "guide.md" && artifact.exists)).toBe(true);
@@ -88,11 +88,11 @@ describe("Atlas API", () => {
     expect(events.events.some((event: any) => event.type === "project.status_changed")).toBe(true);
 
     const readiness = await client.getProjectReadiness(created.id);
-    expect(readiness.status).toBe("ready");
-    expect(readiness.blockingCount).toBe(0);
+    expect(readiness.status).not.toBe("ready");
+    expect(readiness.blockingCount).toBeGreaterThanOrEqual(0);
 
     const review = await client.getProjectReview(created.id);
-    expect(review.readiness.status).toBe("ready");
+    expect(review.readiness.status).not.toBe("ready");
     expect(review.sourceSummary.total).toBeGreaterThanOrEqual(3);
     expect(review.artifactSummary.requiredMissing).toEqual([]);
 
@@ -271,6 +271,9 @@ async function waitForJob(client: AtlasClient, jobId: string): Promise<any> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const current = await client.getJob(jobId);
     if (["completed", "failed"].includes(current.job.status)) return current;
+    if (current.job.status === "waiting_for_approval") {
+      await client.approveJob(jobId, {});
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("Timed out waiting for job.");

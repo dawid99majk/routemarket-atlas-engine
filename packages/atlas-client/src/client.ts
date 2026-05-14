@@ -158,6 +158,10 @@ export class AtlasClient {
     return this.request("GET", `/jobs/${encodeURIComponent(id)}/logs`);
   }
 
+  approveJob(id: string, approvalData: any = {}): Promise<any> {
+    return this.request("POST", `/jobs/${encodeURIComponent(id)}/approve`, { approvalData });
+  }
+
   preparePublish(slug: string): Promise<any> {
     return this.request("POST", `/projects/${encodeURIComponent(slug)}/prepare-publish`, {});
   }

@@ -9,6 +9,17 @@ const maxJobs = Number(process.env.ATLAS_MAX_JOBS ?? 200);
 
 const server = startAtlasApi({ rootDir, port, corsOrigin, apiToken, logRequests, maxJobs });
 
+if (process.env.NODE_ENV === "production") {
+  if (!apiToken) {
+    console.error("FATAL: ATLAS_API_TOKEN is required in production environment.");
+    process.exit(1);
+  }
+  if (corsOrigin === "*") {
+    console.error("FATAL: ATLAS_CORS_ORIGIN='*' is forbidden in production environment.");
+    process.exit(1);
+  }
+}
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     server.close(() => {

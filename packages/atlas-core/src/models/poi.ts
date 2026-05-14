@@ -18,7 +18,12 @@ export const PoiSchema = z.object({
   openingHours: z.string().optional(),
   waterAvailability: z.enum(["unknown", "available", "seasonal", "none"]).optional(),
   facilities: z.array(z.string()).optional(),
-  isVerifiedByDeepResearch: z.boolean().optional()
+  isVerifiedByDeepResearch: z.boolean().optional(),
+  placeId: z.string().optional(),
+  rating: z.number().optional(),
+  userRatingCount: z.number().optional(),
+  types: z.array(z.string()).optional(),
+  verificationSource: z.enum(["google_places", "deep_research", "manual", "placeholder"]).optional()
 });
 
 export type Poi = z.infer<typeof PoiSchema>;

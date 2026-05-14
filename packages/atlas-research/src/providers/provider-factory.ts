@@ -65,11 +65,16 @@ export function getSearchProviderStatus(env: NodeJS.ProcessEnv = process.env): S
 }
 
 import { MockDeepResearchProvider } from "../mock/mock-deep-research-provider.js";
+import { AnthropicDeepResearchProvider } from "./anthropic-deep-research-provider.js";
 import type { DeepResearchProvider } from "./interfaces.js";
 
 export function createDeepResearchProvider(options: SearchProviderFactoryOptions = {}): {
   provider: DeepResearchProvider;
   providerName: "mock" | "real";
 } {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (anthropicKey) {
+    return { provider: new AnthropicDeepResearchProvider(anthropicKey), providerName: "real" };
+  }
   return { provider: new MockDeepResearchProvider(), providerName: "mock" };
 }

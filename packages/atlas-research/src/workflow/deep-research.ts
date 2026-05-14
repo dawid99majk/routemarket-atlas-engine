@@ -2,8 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Claim, RouteProject, Source } from "../../../atlas-core/src/index.js";
 import { readJsonFile, writeJsonFile } from "../../../atlas-core/src/index.js";
-import { MockDeepResearchProvider } from "../mock/mock-deep-research-provider.js";
+import { createDeepResearchProvider } from "../providers/provider-factory.js";
 import type { DeepResearchExtractionResult, DeepResearchProvider, PoiCandidate } from "../providers/interfaces.js";
+import { GooglePlacesProvider } from "../providers/google-places-provider.js";
 
 export type DeepResearchRun = {
   sourceId: string;
@@ -35,9 +36,9 @@ export type RunDeepResearchInput = {
 type GeoJsonFeature = {
   type: "Feature";
   properties?: Record<string, unknown>;
-  geometry?: {
-    type?: string;
-    coordinates?: number[];
+  geometry: {
+    type: string;
+    coordinates: number[];
   };
 };
 
@@ -47,7 +48,7 @@ type PoiFeatureCollection = {
 };
 
 export async function runDeepResearch(input: RunDeepResearchInput): Promise<DeepResearchReport> {
-  const provider = input.provider ?? new MockDeepResearchProvider();
+  const provider = input.provider ?? createDeepResearchProvider().provider;
   const sourceLimit = Math.max(1, Math.min(input.sourceLimit ?? 3, 20));
   const sourcesPath = join(input.project.folderPath, "sources.json");
   const claimsPath = join(input.project.folderPath, "claims.json");
@@ -73,7 +74,7 @@ export async function runDeepResearch(input: RunDeepResearchInput): Promise<Deep
       source.rawContentPath = rawContentPath;
       source.deepResearchStatus = "processed";
       addedClaims.push(...mapExtractedClaims(input.project, source, result.claims, existingClaims.length + addedClaims.length));
-      mappedPoiCount += mergeCandidatePois(geojson, result.pois);
+      mappedPoiCount += await mergeCandidatePoisAsync(geojson, result.pois);
 
       runs.push({
         sourceId: source.id,
@@ -98,22 +99,45 @@ export async function runDeepResearch(input: RunDeepResearchInput): Promise<Deep
     }
   }
 
+  const finalClaims = consolidateClaims(existingClaims, addedClaims);
+
   const report: DeepResearchReport = {
     projectId: input.project.id,
     processedSourceCount: runs.filter((run) => run.status === "processed").length,
     failedSourceCount: runs.filter((run) => run.status === "failed").length,
-    addedClaimCount: addedClaims.length,
+    addedClaimCount: finalClaims.length - existingClaims.length,
     candidatePoiCount: runs.reduce((sum, run) => sum + run.candidatePois.length, 0),
     mappedPoiCount,
     runs
   };
 
   await writeJsonFile(sourcesPath, sources);
-  await writeJsonFile(claimsPath, [...existingClaims, ...addedClaims]);
+  await writeJsonFile(claimsPath, finalClaims);
   await writeJsonFile(poiPath, geojson);
   await writeJsonFile(join(input.project.folderPath, "deep_research.json"), report);
 
   return report;
+}
+
+function consolidateClaims(existing: Claim[], newClaims: Claim[]): Claim[] {
+  const all = [...existing];
+  for (const nc of newClaims) {
+    const ncLower = nc.claim.toLowerCase().trim();
+    const match = all.find(c => {
+      const cLower = c.claim.toLowerCase().trim();
+      return cLower === ncLower || (cLower.includes(ncLower) && cLower.length < ncLower.length * 2) || (ncLower.includes(cLower) && ncLower.length < cLower.length * 2);
+    });
+    if (match) {
+      match.sources = [...new Set([...match.sources, ...nc.sources])];
+      if (match.sources.length >= 2 && match.status === "uncertain") {
+        match.status = "likely";
+        match.confidence = Math.max(match.confidence, 0.8);
+      }
+    } else {
+      all.push(nc);
+    }
+  }
+  return all;
 }
 
 async function readOptionalJson<T>(path: string, fallback: T): Promise<T> {
@@ -137,56 +161,66 @@ function mapExtractedClaims(
     claimType: normalizeClaimType(claim.type),
     confidence: clampConfidence(claim.confidence),
     status: claim.confidence >= 0.8 ? "likely" : "uncertain",
-    sources: [source.id]
+    sources: [source.id],
+    needsHumanReview: false
   }));
 }
 
-function mergeCandidatePois(geojson: PoiFeatureCollection, candidates: PoiCandidate[]): number {
+function sameName(left: unknown, right: string | undefined): boolean {
+  if (!left || !right) return false;
+  return typeof left === "string" && left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function poiCandidateProperties(candidate: PoiCandidate) {
+  return {
+    description: candidate.description,
+    type: candidate.type,
+    contactPhone: candidate.contactPhone,
+    contactEmail: candidate.contactEmail,
+    website: candidate.website,
+    priceRange: candidate.priceRange,
+    openingHours: candidate.openingHours,
+    waterAvailability: candidate.waterAvailability,
+    facilities: candidate.facilities,
+    placeId: (candidate as any).placeId,
+    rating: (candidate as any).rating,
+    userRatingCount: (candidate as any).userRatingCount,
+    types: (candidate as any).types,
+    verificationSource: (candidate as any).verificationSource || "deep_research"
+  };
+}
+
+async function mergeCandidatePoisAsync(geojson: PoiFeatureCollection, candidates: PoiCandidate[]): Promise<number> {
+  const googleKey = process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_API_KEY;
+  const googlePlaces = googleKey ? new GooglePlacesProvider(googleKey) : null;
+
   let mapped = 0;
-  for (const candidate of candidates) {
+  for (let candidate of candidates) {
+    if (googlePlaces) {
+      candidate = await googlePlaces.enrichPoi(candidate);
+    }
     const matched = geojson.features.find((feature) => sameName(feature.properties?.name, candidate.name));
     if (matched) {
       matched.properties = { ...(matched.properties ?? {}), ...poiCandidateProperties(candidate), is_verified_by_deep_research: true };
+      if (typeof candidate.lat === "number" && typeof candidate.lng === "number") {
+        matched.geometry = { type: "Point", coordinates: [candidate.lng, candidate.lat] };
+      }
       mapped += 1;
-      continue;
-    }
-
-    if (typeof candidate.lat === "number" && typeof candidate.lng === "number") {
+    } else if (typeof candidate.lat === "number" && typeof candidate.lng === "number") {
       geojson.features.push({
         type: "Feature",
         properties: {
-          id: `poi_${String(geojson.features.length + 1).padStart(3, "0")}`,
-          ...poiCandidateProperties(candidate)
+          id: `poi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+          name: candidate.name,
+          ...poiCandidateProperties(candidate),
+          is_verified_by_deep_research: true
         },
-        geometry: {
-          type: "Point",
-          coordinates: [candidate.lng, candidate.lat]
-        }
+        geometry: { type: "Point", coordinates: [candidate.lng, candidate.lat] }
       });
       mapped += 1;
     }
   }
   return mapped;
-}
-
-function poiCandidateProperties(candidate: PoiCandidate): Record<string, unknown> {
-  return {
-    name: candidate.name,
-    type: candidate.type,
-    description: candidate.description,
-    contact_phone: candidate.contactPhone,
-    contact_email: candidate.contactEmail,
-    website: candidate.website,
-    price_range: candidate.priceRange,
-    opening_hours: candidate.openingHours,
-    water_availability: candidate.waterAvailability,
-    facilities: candidate.facilities,
-    is_verified_by_deep_research: candidate.isVerifiedByDeepResearch
-  };
-}
-
-function sameName(left: unknown, right: string): boolean {
-  return typeof left === "string" && left.trim().toLowerCase() === right.trim().toLowerCase();
 }
 
 function normalizeClaimType(value: string): Claim["claimType"] {

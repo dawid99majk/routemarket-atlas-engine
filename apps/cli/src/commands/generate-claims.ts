@@ -12,7 +12,7 @@ export function registerGenerateClaimsCommand(program: Command): void {
       const project = await loadProject(process.cwd(), options.project);
       const sources = await loadProjectSources(project);
       const claims = await generateClaims(project, sources);
-      await updateProjectStatus(project, "ready_for_route_design");
+      await updateProjectStatus(project, "sources_collected");
       console.log(`Generated ${claims.length} claims for ${project.id}`);
     });
 }

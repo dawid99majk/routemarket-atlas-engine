@@ -181,9 +181,37 @@ npm run atlas -- deep-research --project albania-motorcycle-route-7-days --sourc
 
 This writes `deep_research.json`, raw extracted text under `research/deep/`, marks processed sources, and appends extracted claims without overwriting human/deep research claims on later claim generation.
 
+## Project Lifecycle and Statuses
+
+Every RouteProject follows a strict lifecycle, tracked via a typed enum:
+
+- `research_needed`: Initial state, project created.
+- `sources_collected`: `collect-sources` and `deep-research` executed.
+- `draft_generated`: MVP2 workflow generated the content but it's not yet reviewed.
+- `ready_for_review`: Project passed Readiness Checks and Quality Gates, waiting for human approval.
+- `changes_requested`: Human reviewer requested changes.
+- `blocked`: Project cannot proceed due to critical issues or low quality.
+- `approved_for_publish`: Human reviewer approved the project.
+- `published`: RouteMarket ID assigned, published to live.
+- `archived`: Project abandoned or deprecated.
+
+**Note:** `draft_generated` means the AI finished generating files. `ready_for_review` means it also passed strict validation.
+
+## Quality Gates
+
+Before you can call `prepare-publish`, the project must pass hard **Quality Gates**. The API will block publication (returning HTTP 422 `quality_gate_failed`) if:
+
+- Less than 3 sources are used.
+- No `official` or `map` source is included.
+- Any POI has `0,0` coordinates.
+- `guide.md` contains placeholder text (e.g. "needs validation").
+- The `quality_report.md` or `claims.json` is missing/insufficient.
+- All claims have the `uncertain` status.
+- The `route_summary.json` is explicitly marked as `needs_validation`.
+
 ## RouteMarket Publishing
 
-`prepare-publish` does not publish automatically. It prepares a structured payload that can be used with the RouteMarket MCP tools:
+`prepare-publish` does not publish automatically, and requires passing the Quality Gate. It prepares a structured payload that can be used with the RouteMarket MCP tools:
 
 - `create_route_draft`,
 - `add_route_tip`,
@@ -193,6 +221,14 @@ This writes `deep_research.json`, raw extracted text under `research/deep/`, mar
 - `add_route_recommendation`.
 
 Atlas defaults to draft-first publishing. Human review remains required before setting a route to `published`.
+
+## AI & API Configuration
+
+To enable the real deep research provider and Google Places enrichment, set the following environment variables:
+
+- `ANTHROPIC_API_KEY`: Enables Claude 3 Haiku for deep research extraction and claim aggregation.
+- `GOOGLE_MAPS_API_KEY` or `GOOGLE_API_KEY`: Enables Google Places API for real POI enrichment.
+- `BRAVE_SEARCH_API_KEY`: Enables Brave Search for real source collection.
 
 ## Quality Principle
 

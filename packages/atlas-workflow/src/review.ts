@@ -31,6 +31,7 @@ export type ProjectReviewBundle = {
     requiredMissing: string[];
     optionalPresent: string[];
   };
+  recommendedDecision: ReviewDecision;
   latestDecision?: ProjectReviewDecision;
   recentEvents: ProjectEvent[];
 };
@@ -44,12 +45,17 @@ export async function buildProjectReviewBundle(input: {
   const readiness = assessProjectReadiness(input);
   const events = await listProjectEvents(input.project.folderPath);
 
+  let recommendedDecision: ReviewDecision = "approved";
+  if (readiness.blockingCount > 0) recommendedDecision = "blocked";
+  else if (readiness.warningCount > 0) recommendedDecision = "changes_requested";
+
   return {
     project: input.project,
     readiness,
     sourceSummary: summarizeSources(input.sources),
     claimSummary: summarizeClaims(input.claims),
     artifactSummary: summarizeArtifacts(input.artifacts),
+    recommendedDecision,
     latestDecision: await readLatestReviewDecision(input.project),
     recentEvents: events.slice(-10).reverse()
   };
@@ -128,7 +134,9 @@ function summarizeArtifacts(artifacts: ProjectArtifact[]): ProjectReviewBundle["
   };
 }
 
-function statusForDecision(decision: ReviewDecision): string {
+import type { ProjectStatus } from "../../atlas-core/src/index.js";
+
+function statusForDecision(decision: ReviewDecision): ProjectStatus {
   if (decision === "approved") return "approved_for_publish";
   if (decision === "changes_requested") return "changes_requested";
   return "blocked";

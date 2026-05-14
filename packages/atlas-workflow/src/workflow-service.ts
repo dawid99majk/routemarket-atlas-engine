@@ -4,12 +4,17 @@ import {
   createRouteProject,
   listRouteProjects,
   readJsonFile,
+  readJsonFileWithSchema,
+  RouteProjectSchema,
+  SourceSchema,
+  ClaimSchema,
   routesPath,
   updateProjectStatus,
   type RouteProject,
   type Source,
   type Claim
 } from "../../atlas-core/src/index.js";
+import { z } from "zod";
 import { prepareRouteMarketDraft } from "../../atlas-publisher/src/index.js";
 import { collectSources, discoverDemand, extractPois, generateClaims, getSearchProviderStatus, runDeepResearch } from "../../atlas-research/src/index.js";
 import type { SearchProviderMode } from "../../atlas-research/src/index.js";
@@ -160,50 +165,137 @@ export class AtlasWorkflowService {
     return this.runMvp2WithProgress(projectSlug);
   }
 
-  async runMvp2WithProgress(projectSlug: string, onProgress?: WorkflowProgressCallback) {
+  async runMvp2WithProgress(projectSlug: string, onProgress?: WorkflowProgressCallback, startStep: string = "claims", approvalData?: any) {
     let { project, sources } = await this.loadProjectBundle(projectSlug);
-    const progress = async (message: string, value: number, currentStep: string) => {
-      onProgress?.({ message, progress: value, currentStep });
+    const progress = async (message: string, value: number, currentStep: string, waitContext?: any) => {
+      onProgress?.({ message, progress: value, currentStep, waitContext } as any);
       await appendProjectEvent(project.folderPath, {
         type: `workflow.${currentStep}`,
         message,
-        data: { progress: value }
+        data: { progress: value, paused: !!waitContext }
       });
     };
 
-    await progress("Generating claims.", 10, "claims");
-    await generateClaims(project, sources);
-    await progress("Extracting POI.", 20, "pois");
-    await extractPois(project);
-    await progress("Writing route concept.", 35, "concept");
-    const concept = await generateRouteConcept({ project, sources });
-    await progress("Writing guide draft.", 50, "guide");
-    await generateGuideDraft({ project, sources, concept });
-    await progress("Generating tips.", 60, "tips");
-    await generateRouteTips(project);
-    await progress("Generating recommendations.", 68, "recommendations");
-    await generateRecommendations(project);
-    await progress("Preparing media pack.", 76, "media");
-    await prepareMediaPack(project);
-    await progress("Writing quality report.", 84, "quality");
-    await generateQualityReport({ project, sources, gpxValid: false, geojsonValid: true });
-    await progress("Writing review checklist.", 90, "review");
-    await writeReviewChecklist(project);
-    await progress("Preparing RouteMarket payload.", 96, "payload");
-    await prepareRouteMarketDraft(project);
-    project = await updateProjectStatus(project, "ready_for_review");
-    await appendProjectEvent(project.folderPath, {
-      type: "project.status_changed",
-      message: "Project status changed to ready_for_review.",
-      data: { status: project.status }
-    });
+    const steps = [
+      {
+        id: "claims",
+        run: async () => {
+          await progress("Generating claims.", 10, "claims");
+          await generateClaims(project, sources);
+        }
+      },
+      {
+        id: "pois",
+        run: async () => {
+          await progress("Extracting POI.", 20, "pois");
+          await extractPois(project);
+          
+          // Pause here for human POI verification
+          const poiData = await this.readProjectFile(projectSlug, "poi.geojson");
+          await progress("POI extracted. Waiting for verification.", 25, "pois_approval", {
+            type: "poi_verification",
+            data: JSON.parse(poiData)
+          });
+        }
+      },
+      {
+        id: "concept",
+        run: async () => {
+          // If we have approvalData here, we might want to apply it (e.g. updated POIs)
+          if (approvalData?.type === "poi_verification" && approvalData.data) {
+            await this.writeProjectFile(projectSlug, "poi.geojson", JSON.stringify(approvalData.data, null, 2));
+          }
+
+          await progress("Writing route concept.", 35, "concept");
+          const concept = await generateRouteConcept({ project, sources });
+          return concept;
+        }
+      },
+      {
+        id: "guide",
+        run: async (concept: any) => {
+          await progress("Writing guide draft.", 50, "guide");
+          await generateGuideDraft({ project, sources, concept });
+        }
+      },
+      {
+        id: "tips",
+        run: async () => {
+          await progress("Generating tips.", 60, "tips");
+          await generateRouteTips(project);
+        }
+      },
+      {
+        id: "recommendations",
+        run: async () => {
+          await progress("Generating recommendations.", 68, "recommendations");
+          await generateRecommendations(project);
+        }
+      },
+      {
+        id: "media",
+        run: async () => {
+          await progress("Preparing media pack.", 76, "media");
+          await prepareMediaPack(project);
+
+          // Final pause for media/GPX verification
+          const manifest = await this.readProjectFile(projectSlug, "media/manifest.json");
+          await progress("Media pack prepared. Final verification needed.", 80, "final_approval", {
+            type: "final_verification",
+            manifest: JSON.parse(manifest)
+          });
+        }
+      },
+      {
+        id: "quality",
+        run: async () => {
+          await progress("Writing quality report.", 84, "quality");
+          await generateQualityReport({ project, sources, gpxValid: false, geojsonValid: true });
+        }
+      },
+      {
+        id: "review",
+        run: async () => {
+          await progress("Writing review checklist.", 90, "review");
+          await writeReviewChecklist(project);
+        }
+      },
+      {
+        id: "payload",
+        run: async () => {
+          await progress("Preparing RouteMarket payload.", 96, "payload");
+          await prepareRouteMarketDraft(project);
+          project = await updateProjectStatus(project, "draft_generated");
+          await appendProjectEvent(project.folderPath, {
+            type: "project.status_changed",
+            message: "Project status changed to draft_generated.",
+            data: { status: project.status }
+          });
+        }
+      }
+    ];
+
+    let startIndex = steps.findIndex(s => s.id === startStep);
+    if (startIndex === -1) startIndex = 0;
+
+    let lastResult: any = undefined;
+    for (let i = startIndex; i < steps.length; i++) {
+      lastResult = await steps[i].run(lastResult);
+    }
+
     sources = await this.loadSources(project);
     onProgress?.({ message: "MVP 2 workflow completed.", progress: 100, currentStep: "completed" });
     return { project, sources };
   }
 
+
   async preparePublish(projectSlug: string) {
     const project = await this.loadProject(projectSlug);
+    const { checkQualityGates, QualityGateError } = await import("./quality-gates.js");
+    const issues = await checkQualityGates(project);
+    if (issues.length > 0) {
+      throw new QualityGateError(issues);
+    }
     return prepareRouteMarketDraft(project);
   }
 
@@ -298,7 +390,7 @@ export class AtlasWorkflowService {
     return { path: file, content };
   }
 
-  async setProjectStatus(projectSlug: string, status: string): Promise<RouteProject> {
+  async setProjectStatus(projectSlug: string, status: import("../../atlas-core/src/index.js").ProjectStatus): Promise<RouteProject> {
     const project = await this.loadProject(projectSlug);
     const updated = await updateProjectStatus(project, status);
     await appendProjectEvent(project.folderPath, {
@@ -316,15 +408,15 @@ export class AtlasWorkflowService {
   }
 
   private loadProject(projectSlug: string): Promise<RouteProject> {
-    return readJsonFile<RouteProject>(join(routesPath(this.options.rootDir, projectSlug), "project.json"));
+    return readJsonFileWithSchema<RouteProject>(join(routesPath(this.options.rootDir, projectSlug), "project.json"), RouteProjectSchema);
   }
 
   private loadSources(project: RouteProject): Promise<Source[]> {
-    return readJsonFile<Source[]>(join(project.folderPath, "sources.json"));
+    return readJsonFileWithSchema<Source[]>(join(project.folderPath, "sources.json"), z.array(SourceSchema));
   }
 
   private loadClaims(project: RouteProject): Promise<Claim[]> {
-    return readJsonFile<Claim[]>(join(project.folderPath, "claims.json"));
+    return readJsonFileWithSchema<Claim[]>(join(project.folderPath, "claims.json"), z.array(ClaimSchema));
   }
 }
 
