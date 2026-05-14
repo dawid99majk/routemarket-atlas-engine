@@ -1,0 +1,14 @@
+{
+  "distanceKm": 3,
+  "elevationGainM": 300,
+  "estimatedTimeH": 0.2,
+  "difficulty": "easy",
+  "riskLevel": "low",
+  "loopType": "loop",
+  "season": "May-October",
+  "startPoint": "42.38900, 19.78900",
+  "endPoint": "42.38900, 19.78900",
+  "surfaceType": "mixed",
+  "validationStatus": "draft",
+  "updatedAt": "2026-05-14T20:05:22.086Z"
+}

@@ -1,0 +1,20 @@
+{
+  "projectId": "etap-1-test-project",
+  "topic": "Etap 1 Test Project",
+  "category": "motorcycle",
+  "region": "Test Region",
+  "language": "en",
+  "updatedAt": "2026-05-14T20:02:50.905Z",
+  "materials": [
+    {
+      "id": "mat_link_1778788676249",
+      "inputId": "link_1778788676249",
+      "type": "link",
+      "title": "https://routemarket.io",
+      "content": "Link to external resource: https://routemarket.io",
+      "sourceUrl": "https://routemarket.io",
+      "trustLevel": "unknown",
+      "status": "usable"
+    }
+  ]
+}

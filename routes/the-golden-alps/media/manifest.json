@@ -1,0 +1,14 @@
+{
+  "updatedAt": "2026-05-14T20:05:22.185Z",
+  "assets": [
+    {
+      "id": "media_ai_cover_prompt",
+      "role": "cover_candidate",
+      "source": "ai_prompt",
+      "prompt": "Realistic travel editorial style cover for The Golden Alps in Albania, category: motorcycle.",
+      "licenseStatus": "ai_generated",
+      "approvalStatus": "pending",
+      "createdAt": "2026-05-14T20:05:22.185Z"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+[
+  {
+    "id": "claim_tech_dist_1778788955367",
+    "topicId": "etap-1-test-project",
+    "claim": "The total distance of the route is approximately 0.4 km.",
+    "claimType": "distance",
+    "confidence": 0.95,
+    "status": "verified",
+    "sources": [
+      "route_summary.json"
+    ],
+    "needsHumanReview": false
+  },
+  {
+    "id": "claim_tech_ele_1778788955367",
+    "topicId": "etap-1-test-project",
+    "claim": "The total elevation gain is 150 m.",
+    "claimType": "difficulty",
+    "confidence": 0.9,
+    "status": "verified",
+    "sources": [
+      "route_summary.json"
+    ],
+    "needsHumanReview": false
+  },
+  {
+    "id": "claim_tech_loop_1778788955367",
+    "topicId": "etap-1-test-project",
+    "claim": "This is a loop route.",
+    "claimType": "route_segment",
+    "confidence": 0.95,
+    "status": "verified",
+    "sources": [
+      "route_summary.json"
+    ],
+    "needsHumanReview": false
+  }
+]

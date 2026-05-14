@@ -1,66 +1,137 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Poi, RouteProject } from "../../../atlas-core/src/index.js";
+import { 
+  readJsonFile, 
+  writeJsonFile, 
+  type Poi, 
+  type RouteProject, 
+  type ResearchPack 
+} from "../../../atlas-core/src/index.js";
 
 export async function extractPois(project: RouteProject): Promise<Poi[]> {
-  const pois = defaultPois(project);
+  const now = new Date().toISOString();
+  const candidates: Poi[] = [];
+
+  // 1. Extract from GPX waypoints
+  const gpxPois = await extractFromGpx(project);
+  candidates.push(...gpxPois);
+
+  // 2. Extract from Deep Research / Research Pack
+  const researchPois = await extractFromResearch(project);
+  candidates.push(...researchPois);
+
+  // 3. De-duplicate by name and coordinates
+  const uniquePois = deduplicatePois(candidates);
+
+  // 4. Save candidates
+  await writeJsonFile(join(project.folderPath, "poi_candidates.json"), {
+    projectId: project.id,
+    updatedAt: now,
+    pois: uniquePois
+  });
+
+  // 5. Save to GeoJSON (only those with coordinates)
   const geojson = {
     type: "FeatureCollection",
-    features: pois.map((poi) => ({
-      type: "Feature",
-      properties: {
-        id: poi.id,
-        name: poi.name,
-        type: poi.type,
-        description: poi.description,
-        fun_fact: poi.funFact
-      },
-      geometry: {
-        type: "Point",
-        coordinates: [poi.lng, poi.lat]
-      }
-    }))
+    features: uniquePois
+      .filter(p => p.lat !== 0 && p.lng !== 0)
+      .map((poi) => ({
+        type: "Feature",
+        properties: {
+          id: poi.id,
+          name: poi.name,
+          type: poi.type,
+          description: poi.description,
+          fun_fact: poi.funFact,
+          contactPhone: poi.contactPhone,
+          priceRange: poi.priceRange,
+          isVerified: poi.isVerifiedByDeepResearch
+        },
+        geometry: {
+          type: "Point",
+          coordinates: [poi.lng, poi.lat]
+        }
+      }))
   };
 
   await writeFile(join(project.folderPath, "poi.geojson"), `${JSON.stringify(geojson, null, 2)}\n`, "utf8");
+  
+  return uniquePois;
+}
+
+async function extractFromGpx(project: RouteProject): Promise<Poi[]> {
+  const gpxPath = join(project.folderPath, "route.gpx");
+  try {
+    const xml = await readFile(gpxPath, "utf8");
+    const wptRegex = /<wpt\s+lat="([^"]+)"\s+lon="([^"]+)"[^>]*>(.*?)<\/wpt>/gs;
+    const nameRegex = /<name>([^<]+)<\/name>/;
+    const descRegex = /<desc>([^<]+)<\/desc>/;
+    const typeRegex = /<type>([^<]+)<\/type>/;
+
+    const pois: Poi[] = [];
+    let match;
+    while ((match = wptRegex.exec(xml)) !== null) {
+      const lat = parseFloat(match[1]);
+      const lng = parseFloat(match[2]);
+      const inner = match[3];
+
+      const nameMatch = nameRegex.exec(inner);
+      const descMatch = descRegex.exec(inner);
+      const typeMatch = typeRegex.exec(inner);
+
+      pois.push({
+        id: `poi_gpx_${pois.length + 1}_${Date.now()}`,
+        name: nameMatch ? nameMatch[1] : "Unnamed Waypoint",
+        type: (typeMatch ? typeMatch[1] : "marker") as any,
+        lat,
+        lng,
+        description: descMatch ? descMatch[1] : "",
+        sortOrder: pois.length
+      });
+    }
+    return pois;
+  } catch {
+    return [];
+  }
+}
+
+async function extractFromResearch(project: RouteProject): Promise<Poi[]> {
+  const pois: Poi[] = [];
+  try {
+    const pack = await readJsonFile<ResearchPack>(join(project.folderPath, "research_pack.json"));
+    // Placeholder: normally we'd LLM-extract POIs from content.
+    // For now, if there's deep research with POIs, we'd find them there.
+  } catch {}
+
+  try {
+    const deep = await readJsonFile<any>(join(project.folderPath, "deep_research.json"));
+    if (deep && Array.isArray(deep.pois)) {
+      deep.pois.forEach((p: any, index: number) => {
+        pois.push({
+          id: `poi_deep_${index}_${Date.now()}`,
+          name: p.name,
+          type: p.type || "landmark",
+          lat: p.lat || 0,
+          lng: p.lng || 0,
+          description: p.description || "",
+          contactPhone: p.contactPhone,
+          website: p.website,
+          isVerifiedByDeepResearch: true,
+          sortOrder: index
+        });
+      });
+    }
+  } catch {}
+
   return pois;
 }
 
-function defaultPois(project: RouteProject): Poi[] {
-  if (project.region.toLowerCase() === "albania") {
-    return [
-      {
-        id: "poi_001",
-        name: "Shkoder",
-        type: "landmark",
-        lat: 42.0693,
-        lng: 19.5126,
-        description: "Candidate northern Albania logistics base for a motorcycle route.",
-        funFact: "Often used as a gateway toward the Albanian Alps.",
-        sortOrder: 0
-      },
-      {
-        id: "poi_002",
-        name: "Theth area",
-        type: "viewpoint",
-        lat: 42.3959,
-        lng: 19.7745,
-        description: "Candidate mountain scenery area requiring road condition checks.",
-        funFact: "The area is known for dramatic alpine landscapes.",
-        sortOrder: 1
-      },
-      {
-        id: "poi_003",
-        name: "Berat",
-        type: "landmark",
-        lat: 40.7058,
-        lng: 19.9522,
-        description: "Candidate cultural overnight stop.",
-        funFact: "Berat is widely known for its historic Ottoman-era architecture.",
-        sortOrder: 2
-      }
-    ];
-  }
-
-  return [];
+function deduplicatePois(pois: Poi[]): Poi[] {
+  const seen = new Set<string>();
+  return pois.filter(p => {
+    const key = `${p.name.toLowerCase()}_${p.lat.toFixed(4)}_${p.lng.toFixed(4)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

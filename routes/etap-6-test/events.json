@@ -1,0 +1,64 @@
+[
+  {
+    "id": "evt_mp5x1ifl_g72bdh",
+    "createdAt": "2026-05-14T20:03:17.265Z",
+    "type": "workflow.input",
+    "message": "Processing input materials.",
+    "data": {
+      "progress": 5,
+      "paused": false
+    }
+  },
+  {
+    "id": "evt_mp5x1ifx_ol451g",
+    "createdAt": "2026-05-14T20:03:17.277Z",
+    "type": "workflow.gpx",
+    "message": "Analyzing GPX.",
+    "data": {
+      "progress": 10,
+      "paused": false
+    }
+  },
+  {
+    "id": "evt_mp5x1ig8_wmkn5d",
+    "createdAt": "2026-05-14T20:03:17.288Z",
+    "type": "workflow.gpx_summary_approval",
+    "message": "GPX analyzed. Waiting for summary approval.",
+    "data": {
+      "progress": 15,
+      "paused": true
+    }
+  },
+  {
+    "id": "evt_mp5x1mqi_ll4pmu",
+    "createdAt": "2026-05-14T20:03:22.842Z",
+    "type": "review.approval",
+    "message": "Approval for gpx_summary_approval: approved.",
+    "data": {
+      "stage": "gpx_summary_approval",
+      "decision": "approved",
+      "reviewer": "human",
+      "decidedAt": "2026-05-14T20:03:22.834Z"
+    }
+  },
+  {
+    "id": "evt_mp5x1rae_3u9dpl",
+    "createdAt": "2026-05-14T20:03:28.742Z",
+    "type": "workflow.claims",
+    "message": "Generating claims.",
+    "data": {
+      "progress": 25,
+      "paused": false
+    }
+  },
+  {
+    "id": "evt_mp5x1rau_g04qwj",
+    "createdAt": "2026-05-14T20:03:28.758Z",
+    "type": "workflow.claims_approval",
+    "message": "Claims generated. Waiting for approval.",
+    "data": {
+      "progress": 30,
+      "paused": true
+    }
+  }
+]

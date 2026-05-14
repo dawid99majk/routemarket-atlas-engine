@@ -1,0 +1,20 @@
+[
+  {
+    "id": "tip_001",
+    "category": "before_start_weather",
+    "content": "Check weather separately for mountain and lowland sections in Test Region. Conditions can change quickly on scenic roads.",
+    "sortOrder": 1
+  },
+  {
+    "id": "tip_002",
+    "category": "before_start_fuel",
+    "content": "Refuel before remote or mountain sections and do not wait for reserve range.",
+    "sortOrder": 2
+  },
+  {
+    "id": "tip_003",
+    "category": "good_tip",
+    "content": "Keep the GPX offline and check local conditions before starting. This draft still requires human review.",
+    "sortOrder": 3
+  }
+]

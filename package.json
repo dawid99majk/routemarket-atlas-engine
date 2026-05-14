@@ -8,6 +8,7 @@
   },
   "scripts": {
     "atlas": "tsx apps/cli/src/index.ts",
+    "demo:golden-route": "tsx scripts/demo-golden-route.ts",
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",

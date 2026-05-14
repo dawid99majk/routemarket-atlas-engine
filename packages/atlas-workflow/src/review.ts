@@ -5,6 +5,7 @@ import { appendProjectEvent, listProjectEvents, type ProjectEvent } from "./even
 import { assessProjectReadiness, type ReadinessReport } from "./readiness.js";
 
 export type ReviewDecision = "approved" | "changes_requested" | "blocked";
+export type ApprovalDecision = "approved" | "changes_requested" | "rejected";
 
 export type ProjectReviewDecision = {
   decision: ReviewDecision;
@@ -89,6 +90,42 @@ export async function saveProjectReviewDecision(input: {
   });
 
   return { project, review };
+}
+
+export async function saveProjectApprovalDecision(input: {
+  project: RouteProject;
+  stage: string;
+  decision: ApprovalDecision;
+  reviewer?: string;
+  notes?: string;
+}): Promise<void> {
+  const path = join(input.project.folderPath, "approvals.json");
+  const approvals = await readJsonFile<any>(path);
+  
+  const record = {
+    stage: input.stage,
+    decision: input.decision,
+    reviewer: input.reviewer ?? "human",
+    notes: input.notes,
+    decidedAt: new Date().toISOString()
+  };
+
+  // Replace existing approval for this stage if it exists
+  const index = approvals.approvals.findIndex((a: any) => a.stage === input.stage);
+  if (index !== -1) {
+    approvals.approvals[index] = record;
+  } else {
+    approvals.approvals.push(record);
+  }
+
+  approvals.updatedAt = record.decidedAt;
+  await writeJsonFile(path, approvals);
+
+  await appendProjectEvent(input.project.folderPath, {
+    type: "review.approval",
+    message: `Approval for ${input.stage}: ${input.decision}.`,
+    data: record
+  });
 }
 
 export async function readLatestReviewDecision(project: RouteProject): Promise<ProjectReviewDecision | undefined> {

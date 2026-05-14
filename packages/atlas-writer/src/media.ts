@@ -1,30 +1,68 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { MediaManifest, RouteProject } from "../../atlas-core/src/index.js";
-import { writeJsonFile } from "../../atlas-core/src/index.js";
+import { 
+  writeJsonFile, 
+  readJsonFile,
+  type MediaManifest, 
+  type RouteProject,
+  type InputManifest,
+  type MediaAsset
+} from "../../atlas-core/src/index.js";
 
 export async function prepareMediaPack(project: RouteProject): Promise<MediaManifest> {
   const now = new Date().toISOString();
-  const prompt = `Original RouteMarket cover image for ${project.title} in ${project.region}. Realistic travel editorial style, no text, no logos, not copying any specific photograph.`;
+  const manifestPath = join(project.folderPath, "media", "manifest.json");
+  const inputManifestPath = join(project.folderPath, "input_manifest.json");
+
+  const assets: MediaAsset[] = [];
+
+  // 1. Add creator photos from input manifest
+  try {
+    const inputManifest = await readJsonFile<InputManifest>(inputManifestPath);
+    for (const item of inputManifest.items) {
+      if (item.type === "photo") {
+        assets.push({
+          id: `media_${item.id}`,
+          role: "gallery", // Default to gallery
+          source: "creator_upload" as any,
+          inputId: item.id,
+          path: item.path,
+          licenseStatus: "creator_owned" as any,
+          locationStatus: "unknown" as any,
+          approvalStatus: "pending" as any,
+          createdAt: item.addedAt
+        } as any);
+      }
+    }
+  } catch (err) {
+    console.warn("Could not read input manifest for media pack.");
+  }
+
+  // 2. Add AI cover prompt as fallback/candidate
+  const prompt = `Realistic travel editorial style cover for ${project.title} in ${project.region}, category: ${project.category}.`;
+  assets.push({
+    id: "media_ai_cover_prompt",
+    role: "cover_candidate" as any,
+    source: "ai_prompt" as any,
+    prompt,
+    licenseStatus: "ai_generated" as any,
+    approvalStatus: "pending" as any,
+    createdAt: now
+  } as any);
+
   const manifest: MediaManifest = {
     updatedAt: now,
-    assets: [
-      {
-        id: "media_001",
-        role: "cover",
-        prompt,
-        licenseStatus: "ai_generated",
-        notes: "Prompt prepared for RouteMarket MCP generate_image. Asset not generated yet.",
-        createdAt: now
-      }
-    ]
+    assets: assets as any
   };
 
-  await writeJsonFile(join(project.folderPath, "media", "manifest.json"), manifest);
-  await writeFile(
-    join(project.folderPath, "media", "license_report.md"),
-    `# Media License Report\n\n## media_001\n\n- Role: cover\n- Status: AI prompt prepared, image not generated yet\n- License status: ai_generated after generation through RouteMarket MCP\n- Prompt: ${prompt}\n`,
-    "utf8"
-  );
+  await writeJsonFile(manifestPath, manifest);
+  
+  // Update license report
+  let report = `# Media License Report\n\n`;
+  for (const asset of assets as any) {
+    report += `## ${asset.id}\n- Role: ${asset.role}\n- Source: ${asset.source || "unknown"}\n- License: ${asset.licenseStatus}\n\n`;
+  }
+  await writeFile(join(project.folderPath, "media", "license_report.md"), report, "utf8");
+
   return manifest;
 }

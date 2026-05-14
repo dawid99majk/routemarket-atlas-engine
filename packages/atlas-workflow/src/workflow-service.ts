@@ -165,7 +165,7 @@ export class AtlasWorkflowService {
     return this.runMvp2WithProgress(projectSlug);
   }
 
-  async runMvp2WithProgress(projectSlug: string, onProgress?: WorkflowProgressCallback, startStep: string = "claims", approvalData?: any) {
+  async runMvp2WithProgress(projectSlug: string, onProgress?: WorkflowProgressCallback, startStep?: string) {
     let { project, sources } = await this.loadProjectBundle(projectSlug);
     const progress = async (message: string, value: number, currentStep: string, waitContext?: any) => {
       onProgress?.({ message, progress: value, currentStep, waitContext } as any);
@@ -176,116 +176,148 @@ export class AtlasWorkflowService {
       });
     };
 
+    const isApproved = async (stage: string) => {
+      try {
+        const approvals = await readJsonFile<any>(join(project.folderPath, "approvals.json"));
+        return approvals.approvals.some((a: any) => a.stage === stage && a.decision === "approved");
+      } catch {
+        return false;
+      }
+    };
+
     const steps = [
+      {
+        id: "input",
+        run: async () => {
+          await progress("Processing input materials.", 5, "input");
+          const { buildResearchPack } = await import("../../atlas-research/src/index.js");
+          await buildResearchPack(project);
+        }
+      },
+      {
+        id: "gpx",
+        run: async () => {
+          await progress("Analyzing GPX.", 10, "gpx");
+          const { analyzeGpx } = await import("../../atlas-research/src/index.js");
+          try {
+            await analyzeGpx(project);
+          } catch (err) {
+            console.warn("GPX analysis failed or file missing, continuing...");
+          }
+          
+          if (!await isApproved("gpx_summary_approval")) {
+            await progress("GPX analyzed. Waiting for summary approval.", 15, "gpx_summary_approval", {
+              type: "approval_needed",
+              stage: "gpx_summary_approval"
+            });
+            return { pause: true };
+          }
+        }
+      },
       {
         id: "claims",
         run: async () => {
-          await progress("Generating claims.", 10, "claims");
-          await generateClaims(project, sources);
+          await progress("Generating claims.", 25, "claims");
+          await generateClaims(project);
+          
+          if (!await isApproved("claims_approval")) {
+            await progress("Claims generated. Waiting for approval.", 30, "claims_approval", {
+              type: "approval_needed",
+              stage: "claims_approval"
+            });
+            return { pause: true };
+          }
         }
       },
       {
         id: "pois",
         run: async () => {
-          await progress("Extracting POI.", 20, "pois");
+          await progress("Extracting POI.", 40, "pois");
           await extractPois(project);
           
-          // Pause here for human POI verification
-          const poiData = await this.readProjectFile(projectSlug, "poi.geojson");
-          await progress("POI extracted. Waiting for verification.", 25, "pois_approval", {
-            type: "poi_verification",
-            data: JSON.parse(poiData)
-          });
+          if (!await isApproved("poi_approval")) {
+            await progress("POI extracted. Waiting for verification.", 45, "poi_approval", {
+              type: "approval_needed",
+              stage: "poi_approval"
+            });
+            return { pause: true };
+          }
         }
       },
       {
         id: "concept",
         run: async () => {
-          // If we have approvalData here, we might want to apply it (e.g. updated POIs)
-          if (approvalData?.type === "poi_verification" && approvalData.data) {
-            await this.writeProjectFile(projectSlug, "poi.geojson", JSON.stringify(approvalData.data, null, 2));
+          await progress("Writing route concept.", 55, "concept");
+          await generateRouteConcept({ project, sources });
+          
+          if (!await isApproved("concept_approval")) {
+            await progress("Concept generated. Waiting for approval.", 60, "concept_approval", {
+              type: "approval_needed",
+              stage: "concept_approval"
+            });
+            return { pause: true };
           }
-
-          await progress("Writing route concept.", 35, "concept");
-          const concept = await generateRouteConcept({ project, sources });
-          return concept;
+        }
+      },
+      {
+        id: "guide_outline",
+        run: async () => {
+          await progress("Generating guide outline.", 70, "guide_outline");
+          const { writeGuideOutline } = await import("../../atlas-writer/src/index.js");
+          await writeGuideOutline(project);
+          
+          if (!await isApproved("guide_outline_approval")) {
+            await progress("Outline generated. Waiting for approval.", 75, "guide_outline_approval", {
+              type: "approval_needed",
+              stage: "guide_outline_approval"
+            });
+            return { pause: true };
+          }
         }
       },
       {
         id: "guide",
-        run: async (concept: any) => {
-          await progress("Writing guide draft.", 50, "guide");
-          await generateGuideDraft({ project, sources, concept });
+        run: async () => {
+          await progress("Writing final guide.", 80, "guide");
+          const { generateGuideV2 } = await import("../../atlas-writer/src/index.js");
+          await generateGuideV2(project);
+          
+          if (!await isApproved("guide_final_approval")) {
+            await progress("Guide written. Waiting for final approval.", 85, "guide_final_approval", {
+              type: "approval_needed",
+              stage: "guide_final_approval"
+            });
+            return { pause: true };
+          }
         }
       },
       {
-        id: "tips",
+        id: "finalize",
         run: async () => {
-          await progress("Generating tips.", 60, "tips");
+          await progress("Finalizing artifacts.", 90, "finalize");
           await generateRouteTips(project);
-        }
-      },
-      {
-        id: "recommendations",
-        run: async () => {
-          await progress("Generating recommendations.", 68, "recommendations");
           await generateRecommendations(project);
-        }
-      },
-      {
-        id: "media",
-        run: async () => {
-          await progress("Preparing media pack.", 76, "media");
           await prepareMediaPack(project);
-
-          // Final pause for media/GPX verification
-          const manifest = await this.readProjectFile(projectSlug, "media/manifest.json");
-          await progress("Media pack prepared. Final verification needed.", 80, "final_approval", {
-            type: "final_verification",
-            manifest: JSON.parse(manifest)
-          });
-        }
-      },
-      {
-        id: "quality",
-        run: async () => {
-          await progress("Writing quality report.", 84, "quality");
-          await generateQualityReport({ project, sources, gpxValid: false, geojsonValid: true });
-        }
-      },
-      {
-        id: "review",
-        run: async () => {
-          await progress("Writing review checklist.", 90, "review");
+          await generateQualityReport({ project, sources, gpxValid: true, geojsonValid: true });
           await writeReviewChecklist(project);
-        }
-      },
-      {
-        id: "payload",
-        run: async () => {
-          await progress("Preparing RouteMarket payload.", 96, "payload");
           await prepareRouteMarketDraft(project);
+          
           project = await updateProjectStatus(project, "draft_generated");
-          await appendProjectEvent(project.folderPath, {
-            type: "project.status_changed",
-            message: "Project status changed to draft_generated.",
-            data: { status: project.status }
-          });
         }
       }
     ];
 
-    let startIndex = steps.findIndex(s => s.id === startStep);
+    let currentStepId = startStep || "input";
+    let startIndex = steps.findIndex(s => s.id === currentStepId);
     if (startIndex === -1) startIndex = 0;
 
-    let lastResult: any = undefined;
     for (let i = startIndex; i < steps.length; i++) {
-      lastResult = await steps[i].run(lastResult);
+      const result = await steps[i].run();
+      if (result?.pause) return { project, status: "paused", step: steps[i].id };
     }
 
-    sources = await this.loadSources(project);
-    onProgress?.({ message: "MVP 2 workflow completed.", progress: 100, currentStep: "completed" });
-    return { project, sources };
+    onProgress?.({ message: "Workflow completed.", progress: 100, currentStep: "completed" });
+    return { project, status: "completed" };
   }
 
 
@@ -343,6 +375,17 @@ export class AtlasWorkflowService {
       decision: input.decision,
       reviewer: input.reviewer,
       notes: input.notes
+    });
+  }
+
+  async approveStage(projectSlug: string, stage: string, decision: import("./review.js").ApprovalDecision, notes?: string) {
+    const project = await this.loadProject(projectSlug);
+    const { saveProjectApprovalDecision } = await import("./review.js");
+    return saveProjectApprovalDecision({
+      project,
+      stage,
+      decision,
+      notes
     });
   }
 
@@ -427,6 +470,7 @@ const allowedProjectFiles = new Set([
   "claims.json",
   "notes.md",
   "poi.geojson",
+  "approvals.json",
   "route_concept.md",
   "guide.md",
   "tips.json",

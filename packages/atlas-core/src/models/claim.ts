@@ -11,15 +11,20 @@ export const ClaimSchema = z.object({
     "distance",
     "difficulty",
     "logistics",
-    "route_segment"
+    "route_segment",
+    "surface",
+    "access",
+    "cost",
+    "legal"
   ]),
   confidence: z.number().min(0).max(1),
   status: z.enum([
-    "confirmed",
+    "extracted",
     "likely",
+    "verified",
+    "contradicted",
     "uncertain",
-    "conflicting",
-    "unsafe_to_publish"
+    "needs_creator_review"
   ]),
   sources: z.array(z.string()),
   evidenceQuotes: z.array(z.string()).optional(),

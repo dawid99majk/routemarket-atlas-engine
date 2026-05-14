@@ -1,0 +1,83 @@
+{
+  "project": {
+    "id": "etap-1-test-project",
+    "title": "Etap 1 Test Project",
+    "slug": "etap-1-test-project",
+    "category": "motorcycle",
+    "region": "Test Region",
+    "language": "en",
+    "status": "sources_collected",
+    "folderPath": "C:\\Users\\dawid\\Desktop\\Creator Routemarket\\routemarket-atlas-engine\\routes\\etap-1-test-project",
+    "createdAt": "2026-05-14T19:57:52.431Z",
+    "updatedAt": "2026-05-14T20:00:38.034Z"
+  },
+  "draft": {
+    "title": "Etap 1 Test Project",
+    "description": "# Etap 1 Test Project\n\n## Short intro\n\nThis is an early RouteMarket draft for a motorcycle route in Test Region. It is prepared from the current research pack and must be reviewed before publication.\n\n## Who is this route for?\n\nThis route is for travelers who want a practical, source-aware route rather than a generic list of places.\n\n## Route overview\n\n- Distance: needs GPX validation\n- Duration: needs validation\n- Difficulty: needs review\n- Best season: needs source confirmation\n- Start: needs route design\n- Finish: needs route design\n- Surface: needs confirmation\n- Required experience: depends on validated route\n- GPX included: not yet validated\n\n## Why this route is worth doing\n\nThe topic appears to fit RouteMarket because it combines destination intent, route intent, and practical navigation needs.\n\n## Route description\n\nDetailed route description should be written after the route concept is verified against sources and map data.\n\n## Key places on the route\n\nPOI extraction is pending. Add only places confirmed by sources or map data.\n\n## Practical information\n\nKeep logistics practical: transport, fuel or water, parking, food, timing, offline maps, and seasonal constraints.\n\n## Safety notes\n\nDo not publish this section until risks are reviewed. Mark uncertain warnings clearly.\n\n## Best time to go\n\nNeeds confirmation from current local and official sources.\n\n## Gear / preparation\n\nPrepare according to category, season, weather, distance, terrain, and remoteness.\n\n## Variants\n\nVariants should be added after the main route is stable.\n\n## Sources and verification\n\nNo sources collected yet.\n\n## Disclaimer\n\nThis draft is AI-assisted and requires human review before publishing. Conditions, access rules, weather, and route safety can change.\n",
+    "category_id": 4,
+    "currency": "PLN",
+    "price": 0,
+    "difficulty": "easy",
+    "distance_km": 0.4,
+    "elevation_gain_m": 150,
+    "estimated_time_h": 0,
+    "location_string": "Test Region",
+    "loop_type": "loop",
+    "risk_level": "low",
+    "season": "May-October",
+    "start_point": "42.38920, 19.78910",
+    "end_point": "42.39200, 19.79200",
+    "surface_type": "mixed",
+    "tags": [
+      "motorcycle",
+      "Test Region",
+      "en"
+    ],
+    "ai_assisted": true
+  },
+  "tips": [
+    {
+      "id": "tip_001",
+      "category": "before_start_weather",
+      "content": "Check weather separately for mountain and lowland sections in Test Region. Conditions can change quickly on scenic roads.",
+      "sortOrder": 1
+    },
+    {
+      "id": "tip_002",
+      "category": "before_start_fuel",
+      "content": "Refuel before remote or mountain sections and do not wait for reserve range.",
+      "sortOrder": 2
+    },
+    {
+      "id": "tip_003",
+      "category": "good_tip",
+      "content": "Keep the GPX offline and check local conditions before starting. This draft still requires human review.",
+      "sortOrder": 3
+    }
+  ],
+  "pois": [
+    {
+      "id": "poi_gpx_1_1778788955379",
+      "name": "Theth Viewpoint",
+      "type": "viewpoint",
+      "lat": 42.3959,
+      "lng": 19.7745,
+      "description": "Famous mountain view",
+      "sortOrder": 0
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "rec_001",
+      "name": "Test Region local food stop",
+      "description": "Placeholder recommendation. Replace with a source-verified local place before publishing.",
+      "whatToOrder": "Local specialty after source verification",
+      "priceRange": "mid-range",
+      "sortOrder": 0
+    }
+  ],
+  "gpx": {
+    "path": "C:\\Users\\dawid\\Desktop\\Creator Routemarket\\routemarket-atlas-engine\\routes\\etap-1-test-project\\route.gpx",
+    "attachMode": "gpx_xml"
+  }
+}

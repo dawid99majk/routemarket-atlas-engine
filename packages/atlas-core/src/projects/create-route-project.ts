@@ -51,7 +51,29 @@ export async function createRouteProject(input: CreateRouteProjectInput): Promis
   });
 
   await mkdir(join(folderPath, "media"), { recursive: true });
+  await mkdir(join(folderPath, "input", "notes"), { recursive: true });
+  await mkdir(join(folderPath, "input", "docs"), { recursive: true });
+  await mkdir(join(folderPath, "input", "photos"), { recursive: true });
+  await mkdir(join(folderPath, "input", "gpx"), { recursive: true });
+  await mkdir(join(folderPath, "input", "links"), { recursive: true });
+
   await writeJsonFile(join(folderPath, "project.json"), project);
+  await writeJsonFile(join(folderPath, "input_manifest.json"), {
+    projectId: project.id,
+    updatedAt: now,
+    items: []
+  });
+  await writeJsonFile(join(folderPath, "creator_answers.json"), {
+    projectId: project.id,
+    updatedAt: now,
+    answers: []
+  });
+  await writeJsonFile(join(folderPath, "approvals.json"), {
+    projectId: project.id,
+    updatedAt: now,
+    approvals: []
+  });
+
   await writeFile(join(folderPath, "brief.md"), starterBrief(project), "utf8");
   await writeJsonFile(join(folderPath, "sources.json"), []);
   await writeJsonFile(join(folderPath, "tips.json"), []);

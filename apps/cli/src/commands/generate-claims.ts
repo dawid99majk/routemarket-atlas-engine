@@ -10,8 +10,7 @@ export function registerGenerateClaimsCommand(program: Command): void {
     .requiredOption("--project <project>", "Project slug")
     .action(async (options) => {
       const project = await loadProject(process.cwd(), options.project);
-      const sources = await loadProjectSources(project);
-      const claims = await generateClaims(project, sources);
+      const claims = await generateClaims(project);
       await updateProjectStatus(project, "sources_collected");
       console.log(`Generated ${claims.length} claims for ${project.id}`);
     });

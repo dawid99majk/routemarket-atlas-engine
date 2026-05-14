@@ -1,0 +1,48 @@
+{
+  "projectId": "the-golden-alps",
+  "updatedAt": "2026-05-14T20:05:22.165Z",
+  "approvals": [
+    {
+      "stage": "gpx_summary_approval",
+      "decision": "approved",
+      "reviewer": "human",
+      "decidedAt": "2026-05-14T20:05:22.102Z"
+    },
+    {
+      "stage": "claims_approval",
+      "decision": "approved",
+      "reviewer": "human",
+      "decidedAt": "2026-05-14T20:05:22.124Z"
+    },
+    {
+      "stage": "poi_approval",
+      "decision": "approved",
+      "reviewer": "human",
+      "decidedAt": "2026-05-14T20:05:22.133Z"
+    },
+    {
+      "stage": "concept_approval",
+      "decision": "approved",
+      "reviewer": "human",
+      "decidedAt": "2026-05-14T20:05:22.140Z"
+    },
+    {
+      "stage": "guide_outline_approval",
+      "decision": "approved",
+      "reviewer": "human",
+      "decidedAt": "2026-05-14T20:05:22.149Z"
+    },
+    {
+      "stage": "guide_final_approval",
+      "decision": "approved",
+      "reviewer": "human",
+      "decidedAt": "2026-05-14T20:05:22.156Z"
+    },
+    {
+      "stage": "media_approval",
+      "decision": "approved",
+      "reviewer": "human",
+      "decidedAt": "2026-05-14T20:05:22.165Z"
+    }
+  ]
+}

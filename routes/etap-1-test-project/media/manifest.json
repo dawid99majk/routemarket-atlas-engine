@@ -1,0 +1,13 @@
+{
+  "updatedAt": "2026-05-14T20:02:35.401Z",
+  "assets": [
+    {
+      "id": "media_001",
+      "role": "cover",
+      "prompt": "Original RouteMarket cover image for Etap 1 Test Project in Test Region. Realistic travel editorial style, no text, no logos, not copying any specific photograph.",
+      "licenseStatus": "ai_generated",
+      "notes": "Prompt prepared for RouteMarket MCP generate_image. Asset not generated yet.",
+      "createdAt": "2026-05-14T20:02:35.401Z"
+    }
+  ]
+}

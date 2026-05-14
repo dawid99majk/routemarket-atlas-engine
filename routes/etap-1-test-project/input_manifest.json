@@ -1,0 +1,17 @@
+{
+  "projectId": "etap-1-test-project",
+  "updatedAt": "2026-05-14T19:57:56.249Z",
+  "items": [
+    {
+      "id": "link_1778788676249",
+      "type": "link",
+      "path": "https://routemarket.io",
+      "originalName": "https://routemarket.io",
+      "mimeType": "text/uri-list",
+      "sizeBytes": 0,
+      "addedAt": "2026-05-14T19:57:56.249Z",
+      "status": "added",
+      "notes": "Official website"
+    }
+  ]
+}

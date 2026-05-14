@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { AtlasWorkflowService, type ReviewDecision } from "../../../../packages/atlas-workflow/src/index.js";
+import { AtlasWorkflowService, type ReviewDecision, type ApprovalDecision } from "../../../../packages/atlas-workflow/src/index.js";
 
 const reviewDecisions = ["approved", "changes_requested", "blocked"] as const;
 
@@ -60,4 +60,19 @@ export function registerReviewDecisionCommand(program: Command): void {
 function parseReviewDecision(value: string): ReviewDecision {
   if (reviewDecisions.includes(value as ReviewDecision)) return value as ReviewDecision;
   throw new Error(`Unsupported review decision "${value}". Use: ${reviewDecisions.join(", ")}.`);
+}
+
+export function registerApproveCommand(program: Command): void {
+  program
+    .command("approve")
+    .description("Approve a specific stage of the workflow")
+    .requiredOption("--project <project>", "Project slug")
+    .requiredOption("--stage <stage>", "Workflow stage (e.g. claims_approval, poi_approval)")
+    .option("--decision <decision>", "approved | changes_requested | rejected", "approved")
+    .option("--notes <notes>", "Notes")
+    .action(async (options) => {
+      const service = new AtlasWorkflowService({ rootDir: process.cwd() });
+      await service.approveStage(options.project, options.stage, options.decision as ApprovalDecision, options.notes);
+      console.log(`Approved stage ${options.stage} for project ${options.project}.`);
+    });
 }

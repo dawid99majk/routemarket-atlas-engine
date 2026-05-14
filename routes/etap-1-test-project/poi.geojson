@@ -1,0 +1,21 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "poi_gpx_1_1778788955379",
+        "name": "Theth Viewpoint",
+        "type": "viewpoint",
+        "description": "Famous mountain view"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          19.7745,
+          42.3959
+        ]
+      }
+    }
+  ]
+}

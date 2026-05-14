@@ -1,0 +1,72 @@
+{
+  "project": {
+    "id": "the-golden-alps",
+    "title": "The Golden Alps",
+    "slug": "the-golden-alps",
+    "category": "motorcycle",
+    "region": "Albania",
+    "language": "en",
+    "status": "research_needed",
+    "folderPath": "C:\\Users\\dawid\\Desktop\\Creator Routemarket\\routemarket-atlas-engine\\routes\\the-golden-alps",
+    "createdAt": "2026-05-14T20:05:21.955Z",
+    "updatedAt": "2026-05-14T20:05:21.955Z"
+  },
+  "draft": {
+    "title": "The Golden Alps",
+    "category_id": 4,
+    "currency": "PLN",
+    "price": 0,
+    "difficulty": "easy",
+    "distance_km": 3,
+    "elevation_gain_m": 300,
+    "estimated_time_h": 0.2,
+    "location_string": "Albania",
+    "loop_type": "loop",
+    "risk_level": "low",
+    "season": "May-October",
+    "start_point": "42.38900, 19.78900",
+    "end_point": "42.38900, 19.78900",
+    "surface_type": "mixed",
+    "tags": [
+      "motorcycle",
+      "Albania",
+      "en"
+    ],
+    "ai_assisted": true
+  },
+  "tips": [
+    {
+      "id": "tip_001",
+      "category": "before_start_weather",
+      "content": "Check weather separately for mountain and lowland sections in Albania. Conditions can change quickly on scenic roads.",
+      "sortOrder": 1
+    },
+    {
+      "id": "tip_002",
+      "category": "before_start_fuel",
+      "content": "Refuel before remote or mountain sections and do not wait for reserve range.",
+      "sortOrder": 2
+    },
+    {
+      "id": "tip_003",
+      "category": "good_tip",
+      "content": "Keep the GPX offline and check local conditions before starting. This draft still requires human review.",
+      "sortOrder": 3
+    }
+  ],
+  "pois": [],
+  "recommendations": [
+    {
+      "id": "rec_001",
+      "name": "Albania local food stop",
+      "description": "Placeholder recommendation. Replace with a source-verified local place before publishing.",
+      "whatToOrder": "Local specialty after source verification",
+      "priceRange": "mid-range",
+      "sortOrder": 0
+    }
+  ],
+  "gpx": {
+    "path": "C:\\Users\\dawid\\Desktop\\Creator Routemarket\\routemarket-atlas-engine\\routes\\the-golden-alps\\route.gpx",
+    "attachMode": "gpx_xml"
+  }
+}

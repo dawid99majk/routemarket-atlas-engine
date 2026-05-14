@@ -1,0 +1,10 @@
+[
+  {
+    "id": "rec_001",
+    "name": "Albania local food stop",
+    "description": "Placeholder recommendation. Replace with a source-verified local place before publishing.",
+    "whatToOrder": "Local specialty after source verification",
+    "priceRange": "mid-range",
+    "sortOrder": 0
+  }
+]

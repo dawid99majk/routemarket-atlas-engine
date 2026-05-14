@@ -18,8 +18,11 @@ import { registerWriteReviewCommand } from "./commands/write-review.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerRunMvp2Command } from "./commands/run-mvp2.js";
 import { registerProvidersCommand } from "./commands/providers.js";
-import { registerReviewCommand, registerReviewDecisionCommand } from "./commands/review.js";
+import { registerReviewCommand, registerReviewDecisionCommand, registerApproveCommand } from "./commands/review.js";
 import { registerDeepResearchCommand } from "./commands/deep-research.js";
+import { registerInputCommands } from "./commands/input.js";
+import { registerBuildResearchPackCommand } from "./commands/build-research-pack.js";
+import { registerAnalyzeGpxCommand } from "./commands/analyze-gpx.js";
 
 const program = new Command();
 
@@ -48,7 +51,11 @@ registerRunMvp2Command(program);
 registerProvidersCommand(program);
 registerReviewCommand(program);
 registerReviewDecisionCommand(program);
+registerApproveCommand(program);
 registerDeepResearchCommand(program);
+registerInputCommands(program);
+registerBuildResearchPackCommand(program);
+registerAnalyzeGpxCommand(program);
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : error);

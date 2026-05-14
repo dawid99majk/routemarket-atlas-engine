@@ -12,6 +12,19 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   const poisPath = join(project.folderPath, "poi.geojson");
   const recommendationsPath = join(project.folderPath, "recommendations.json");
   const gpxPath = join(project.folderPath, "route.gpx");
+  const approvalsPath = join(project.folderPath, "approvals.json");
+
+  // Quality gates: Check for critical approvals
+  try {
+    const approvals = await readJsonFile<any>(approvalsPath);
+    const isApproved = (stage: string) => approvals.approvals.some((a: any) => a.stage === stage && a.decision === "approved");
+    
+    if (!isApproved("guide_final_approval") || !isApproved("media_approval")) {
+      console.warn("WARNING: Publishing without final guide or media approval.");
+    }
+  } catch {
+    console.warn("WARNING: No approvals.json found. Publishing in unverified state.");
+  }
 
   const description = await readOptionalText(guidePath);
   const routeSummary = await readOptionalJson<Record<string, unknown>>(routeSummaryPath);
