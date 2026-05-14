@@ -1,0 +1,16 @@
+[Unit]
+Description=RouteMarket Atlas Engine API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/routemarket-atlas-engine
+EnvironmentFile=/srv/routemarket-atlas-engine/.env
+ExecStart=/usr/bin/npm run api
+Restart=always
+RestartSec=5
+User=atlas
+Group=atlas
+
+[Install]
+WantedBy=multi-user.target

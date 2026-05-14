@@ -1,0 +1,22 @@
+services:
+  atlas-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:8787:8787'
+    environment:
+      ATLAS_ROOT_DIR: /app
+      ATLAS_API_PORT: 8787
+      ATLAS_CORS_ORIGIN: https://routemarket.io
+      ATLAS_API_TOKEN: 178913a9cdd9271d077cd37dfded2afb76eaef72b220ec6c911b8509e1dece132712338c88769372979cc45f0ec6c241
+      ATLAS_LOG_REQUESTS: 'true'
+      ATLAS_MAX_JOBS: '200'
+      BRAVE_SEARCH_API_KEY: ''
+    volumes:
+      - atlas-data:/app/data
+      - atlas-routes:/app/routes
+volumes:
+  atlas-data:
+  atlas-routes:

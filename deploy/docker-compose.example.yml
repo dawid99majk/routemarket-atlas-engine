@@ -1,0 +1,23 @@
+services:
+  atlas-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      ATLAS_ROOT_DIR: /app
+      ATLAS_API_PORT: 8787
+      ATLAS_CORS_ORIGIN: "https://your-app-domain.example"
+      ATLAS_API_TOKEN: "change-me"
+      ATLAS_LOG_REQUESTS: "true"
+      ATLAS_MAX_JOBS: "200"
+      BRAVE_SEARCH_API_KEY: ""
+    volumes:
+      - atlas-data:/app/data
+      - atlas-routes:/app/routes
+
+volumes:
+  atlas-data:
+  atlas-routes:
