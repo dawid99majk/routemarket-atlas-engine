@@ -17,7 +17,7 @@ export async function buildResearchPack(project: RouteProject): Promise<Research
   const sourcesPath = join(project.folderPath, "sources.json");
   const researchPackPath = join(project.folderPath, "research_pack.json");
 
-  const manifest = await readJsonFile<InputManifest>(manifestPath).catch(() => ({ items: [] } as InputManifest));
+  const manifest = await readJsonFile<InputManifest>(manifestPath).catch(() => ({ items: [] } as any as InputManifest));
   const webSources = await readJsonFile<Source[]>(sourcesPath).catch(() => [] as Source[]);
 
   const materials: ResearchMaterial[] = [];
