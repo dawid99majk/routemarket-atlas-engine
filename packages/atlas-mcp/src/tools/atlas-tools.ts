@@ -189,8 +189,8 @@ export function registerAtlasTools(server: McpServer): void {
       }
     },
     async (input) => {
-      const { routeProject, sources } = await loadProjectBundle(input.rootDir, input.project);
-      const claims = await generateClaims(routeProject, sources);
+      const { routeProject } = await loadProjectBundle(input.rootDir, input.project);
+      const claims = await generateClaims(routeProject);
       return jsonToolResult({ project: routeProject.id, claims });
     }
   );

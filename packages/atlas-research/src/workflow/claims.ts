@@ -20,7 +20,7 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
   // 1. Generate technical claims from GPX summary
   try {
     const summary = await readJsonFile<RouteSummary>(routeSummaryPath);
-    if (summary.distanceKm > 0) {
+    if (summary.distanceKm && summary.distanceKm > 0) {
       claims.push({
         id: `claim_tech_dist_${Date.now()}`,
         topicId: project.id,
@@ -60,11 +60,11 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
   try {
     const pack = await readJsonFile<ResearchPack>(researchPackPath);
     for (const material of pack.materials) {
-      if (material.type === "deep_research" || material.type === "creator") {
+      if (material.type === "deep_research" || material.trustLevel === "creator") {
         // Here we would normally use an LLM to extract real facts.
         // For MVP, we'll extract some "potential" facts or keep it simple.
         // If it's a creator note, it's a high confidence fact.
-        if (material.type === "creator") {
+        if (material.trustLevel === "creator") {
            claims.push({
             id: `claim_creator_${material.id}_${Date.now()}`,
             topicId: project.id,

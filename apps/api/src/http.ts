@@ -175,7 +175,7 @@ function createRoutes(): Route[] {
       const nextStep = nextStepMap[job.currentStep ?? ""] ?? "claims";
 
       jobs.resume(params.id, body.approvalData, (update) => 
-        service.runMvp2WithProgress(projectSlug, update, nextStep, body.approvalData)
+        service.runMvp2WithProgress(projectSlug, update, nextStep)
       );
 
       return { message: "Job resumed.", jobId: params.id, nextStep };
