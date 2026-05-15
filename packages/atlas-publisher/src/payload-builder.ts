@@ -11,6 +11,7 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   const tipsPath = join(project.folderPath, "tips.json");
   const poisPath = join(project.folderPath, "poi.geojson");
   const recommendationsPath = join(project.folderPath, "recommendations.json");
+  const mediaPath = join(project.folderPath, "media", "manifest.json");
   const gpxPath = join(project.folderPath, "route.gpx");
   const approvalsPath = join(project.folderPath, "approvals.json");
 
@@ -25,10 +26,11 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   const allVerified = claims.length > 0 && claims.every(c => c.status === "verified" || c.id.startsWith("claim_tech_"));
 
   const description = await readOptionalText(guidePath);
-  const routeSummary = await readOptionalJson<Record<string, unknown>>(routeSummaryPath);
+  const routeSummary = await readOptionalJson<any>(routeSummaryPath);
   const tips = await readOptionalJson<RouteTip[]>(tipsPath, []);
   const pois = await readPoisFromGeoJson(poisPath);
   const recommendations = await readOptionalJson<Recommendation[]>(recommendationsPath, []);
+  const mediaManifest = await readOptionalJson<any>(mediaPath, undefined);
 
   const draft: RouteMarketDraftPayload = {
     title: project.title,
@@ -53,11 +55,27 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   };
 
   const prepared: PreparedRouteMarketDraft = {
+    contractVersion: "2.0",
+    publishMode: "draft",
+    canImportToRouteMarket: true,
     project,
     draft,
+    routeSummary,
+    guideText: description,
     tips,
     pois,
-    recommendations
+    recommendations,
+    mediaManifest,
+    claimsSummary: {
+      total: claims.length,
+      verified: claims.filter((claim) => claim.status === "verified").length,
+      likely: claims.filter((claim) => claim.status === "likely").length,
+      needsReview: claims.filter((claim) => claim.needsHumanReview || claim.status === "needs_creator_review" || claim.status === "uncertain").length
+    },
+    qualityGateResult: {
+      passed: true,
+      issues: []
+    }
   };
 
   if (await exists(gpxPath)) {

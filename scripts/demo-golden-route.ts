@@ -1,13 +1,15 @@
 import { AtlasWorkflowService } from "../packages/atlas-workflow/src/index.js";
 import { join } from "node:path";
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 
 async function run() {
   const rootDir = process.cwd();
   const service = new AtlasWorkflowService({ rootDir });
   const slug = "golden-alps";
+  const projectPath = join(rootDir, "routes", "the-golden-alps");
 
   console.log("--- STARTING GOLDEN ROUTE DEMO ---");
+  await rm(projectPath, { recursive: true, force: true });
   
   // 1. Create Project
   console.log("\n[1/5] Creating project...");
@@ -20,7 +22,6 @@ async function run() {
 
   // 2. Add Input (simulated)
   console.log("[2/5] Adding input materials...");
-  const projectPath = join(rootDir, "routes", "the-golden-alps");
   await copyFile(join(rootDir, "fixtures", "golden-route", "route.gpx"), join(projectPath, "route.gpx"));
   await copyFile(join(rootDir, "fixtures", "golden-route", "notes.md"), join(projectPath, "notes.md"));
   await copyFile(join(rootDir, "fixtures", "golden-route", "sources.json"), join(projectPath, "sources.json"));

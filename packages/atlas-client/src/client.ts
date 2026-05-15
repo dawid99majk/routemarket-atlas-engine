@@ -148,6 +148,18 @@ export class AtlasClient {
     return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/links`, input);
   }
 
+  registerExternalInput(slug: string, input: {
+    type: "note" | "document" | "photo" | "gpx" | "link";
+    originalName: string;
+    storageUrl?: string;
+    storageKey?: string;
+    mimeType: string;
+    sizeBytes: number;
+    note?: string;
+  }): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/external`, input);
+  }
+
   buildResearchPack(slug: string): Promise<any> {
     return this.request("POST", `/projects/${encodeURIComponent(slug)}/research-pack`, {});
   }

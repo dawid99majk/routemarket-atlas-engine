@@ -48,7 +48,7 @@ export class JobManager {
   private readonly locks = new Map<string, string>();
   private readonly jobsDir: string;
 
-  constructor(private readonly options: { maxJobs?: number; jobsDir?: string } = {}) {
+  constructor(private readonly options: { maxJobs?: number; jobsDir?: string; maxPersistedLogs?: number } = {}) {
     this.jobsDir = options.jobsDir ?? join(process.cwd(), "data", "jobs");
     this.initPersistence();
   }
@@ -92,9 +92,19 @@ export class JobManager {
   private persistLog(id: string, log: AtlasJobLog) {
     try {
       appendFileSync(join(this.jobsDir, `${id}.log.jsonl`), JSON.stringify(log) + "\\n", "utf8");
+      this.rotateLog(id);
     } catch (e) {
       console.error(`Failed to persist log for job ${id}`, e);
     }
+  }
+
+  private rotateLog(id: string): void {
+    const max = this.options.maxPersistedLogs ?? 500;
+    const path = join(this.jobsDir, `${id}.log.jsonl`);
+    try {
+      const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
+      if (lines.length > max) writeFileSync(path, lines.slice(-max).join("\n") + "\n", "utf8");
+    } catch {}
   }
 
   private readPersistedLogs(id: string): AtlasJobLog[] {

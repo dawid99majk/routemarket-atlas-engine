@@ -20,6 +20,10 @@ Adds GPX XML text to `input/gpx/` and updates `input_manifest.json`.
 
 Adds an external source URL to the input manifest.
 
+### register_external_input
+
+Registers metadata for a file stored outside Atlas. It does not fetch private URLs.
+
 ### collect_sources
 
 Collects provider sources with the mock/Brave provider interface.
@@ -31,6 +35,7 @@ Writes `research_pack.json` from creator input, links, collected sources and dee
 ### analyze_gpx
 
 Writes `route_summary.json`, `route_segments.json`, `route_warnings.json` and `elevation_profile.json`.
+Also writes `route_segments.geojson` for frontend map rendering.
 
 ### generate_claims
 
@@ -63,6 +68,7 @@ Writes a stage approval and applies side effects:
 ### get_review
 
 Returns readiness, quality issues, source summary, claim summary and recent events.
+Also returns approval state, missing inputs, artifact hashes and `nextAction`.
 
 ### read_project_file
 

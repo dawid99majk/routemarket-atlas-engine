@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import type { RouteProject, Source, Claim, RouteSummary } from "../../atlas-core/src/index.js";
 import { readJsonFile } from "../../atlas-core/src/index.js";
+import { findStaleApprovals, hashImportantArtifacts } from "./artifact-hashes.js";
 
 export type QualityIssue = {
   rule: string;
@@ -131,6 +132,10 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
     issues.push({ rule: "missing_route_summary", message: "route_summary.json is missing or invalid." });
   }
 
+  if (await fileExists(pPath("route.gpx")) && !(await fileExists(pPath("route_segments.geojson")))) {
+    issues.push({ rule: "missing_route_segments_geojson", message: "route_segments.geojson is required when GPX exists." });
+  }
+
   // 9: Missing Inputs
   if (await fileExists(pPath("missing_inputs.json"))) {
     try {
@@ -150,6 +155,10 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
         if (!approvals.approvals.some((a: any) => a.stage === r && a.decision === "approved")) {
           issues.push({ rule: `missing_approval_${r}`, message: `Required approval missing: ${r}` });
         }
+      }
+      const stale = findStaleApprovals(approvals, await hashImportantArtifacts(project));
+      for (const item of stale) {
+        issues.push({ rule: `stale_approval_${item.stage}`, message: `Approval ${item.stage} is stale because ${item.file} changed.` });
       }
     } else {
       issues.push({ rule: "missing_approvals_file", message: "approvals.json is missing." });

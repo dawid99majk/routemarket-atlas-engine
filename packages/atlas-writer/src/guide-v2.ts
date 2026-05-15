@@ -77,6 +77,7 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
   if (!concept || isWeakConcept(concept)) {
     missing.push({ code: "missing_route_concept", message: "A real route concept is required before final guide generation.", requiredFor: "guide_final" });
   }
+  missing.push(...missingMandatorySectionFacts(project.category, verifiedClaims));
 
   if (missing.length > 0) {
     const missingInputs: MissingInputs = {
@@ -99,6 +100,17 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
   const warnings = summary!.warnings ?? [];
   const segments = summary!.routeSegments ?? [];
   const trustedMaterials = pack!.materials.filter((m: any) => m.status === "active" || m.status === "usable");
+  const sectionClaims = {
+    logistics: claimsForTypes(claims, ["logistics", "distance", "access"]),
+    safety: claimsForTypes(claims, ["safety", "legal"]),
+    season: claimsForTypes(claims, ["season"]),
+    practical: claimsForTypes(claims, ["surface", "logistics", "access"])
+  };
+  markUsed(sectionClaims.logistics, "logistics");
+  markUsed(sectionClaims.safety, "safety");
+  markUsed(sectionClaims.season, "season_notes");
+  markUsed(sectionClaims.practical, "preparation");
+  await writeFile(join(project.folderPath, "claims.json"), JSON.stringify(claims, null, 2), "utf8");
   const guide = `# ${project.title}
 
 ## Quick facts
@@ -136,15 +148,15 @@ ${pois.length ? pois.map(p => `### ${p.name}\n\n${p.description ?? "Approved poi
 
 ## Logistics
 
-${claimsByType(claims, ["logistics", "distance", "access"])}
+${renderClaims(sectionClaims.logistics)}
 
 ## Safety
 
-${claimsByType(claims, ["safety", "legal"])}
+${renderClaims(sectionClaims.safety)}
 
 ## Season notes
 
-${claimsByType(claims, ["season"])}
+${renderClaims(sectionClaims.season)}
 
 ## Preparation
 
@@ -160,6 +172,14 @@ ${claimsByType(claims, ["season"])}
 ## Sources
 
 ${trustedMaterials.map((material: any) => `- ${material.title}${material.sourceUrl ? ` (${material.sourceUrl})` : ""}`).join("\n")}
+
+## Sources and verification
+
+${claims.filter(c => c.usedInSections?.length).map(c => `- ${c.claim} [${c.sources.join(", ")}] used in ${c.usedInSections!.join(", ")}`).join("\n")}
+
+## Review summary
+
+${reviewSummary(sectionClaims)}
 
 ## Warnings and validation notes
 
@@ -177,6 +197,22 @@ This guide is an editorial navigation aid, not a guarantee of access, safety, we
 function isWeakConcept(concept: string): boolean {
   const lower = concept.toLowerCase();
   return concept.trim().length < 250 || lower.includes("concept status: not designed") || lower.includes("to be confirmed");
+}
+
+function missingMandatorySectionFacts(category: string, claims: Claim[]): MissingInputItem[] {
+  const missing: MissingInputItem[] = [];
+  const has = (types: Claim["claimType"][]) => claims.some((claim) => types.includes(claim.claimType));
+  if (category === "motorcycle") {
+    if (!has(["logistics", "distance", "access"])) missing.push({ code: "missing_motorcycle_logistics", message: "Motorcycle guide requires reviewed logistics facts.", requiredFor: "guide_final" });
+    if (!has(["safety", "legal"])) missing.push({ code: "missing_motorcycle_safety", message: "Motorcycle guide requires reviewed safety facts.", requiredFor: "guide_final" });
+    if (!has(["surface", "logistics", "access"])) missing.push({ code: "missing_motorcycle_practical_claim", message: "Motorcycle guide requires at least one practical route claim.", requiredFor: "guide_final" });
+  }
+  if (category === "hiking" || category === "trekking") {
+    if (!has(["safety"])) missing.push({ code: "missing_hiking_safety", message: "Hiking guide requires reviewed safety facts.", requiredFor: "guide_final" });
+    if (!has(["season"])) missing.push({ code: "missing_hiking_weather", message: "Hiking guide requires reviewed season/weather facts.", requiredFor: "guide_final" });
+    if (!has(["logistics", "access"])) missing.push({ code: "missing_hiking_logistics", message: "Hiking guide requires reviewed water, gear or logistics facts.", requiredFor: "guide_final" });
+  }
+  return missing;
 }
 
 function targetAudience(category: string): string {
@@ -202,9 +238,24 @@ function extractConceptSection(concept: string, heading: string): string {
   return collected.join(" ") || "The route value is described in the approved route concept.";
 }
 
-function claimsByType(claims: Claim[], types: Claim["claimType"][]): string {
-  const selected = claims.filter((claim) => (claim.status === "verified" || claim.status === "likely") && types.includes(claim.claimType));
-  return selected.length ? selected.map((claim) => `- ${claim.claim}`).join("\n") : "- No reviewed facts in this category yet.";
+function claimsForTypes(claims: Claim[], types: Claim["claimType"][]): Claim[] {
+  return claims.filter((claim) => (claim.status === "verified" || claim.status === "likely") && types.includes(claim.claimType));
+}
+
+function renderClaims(claims: Claim[]): string {
+  return claims.map((claim) => `- ${claim.claim}`).join("\n");
+}
+
+function markUsed(claims: Claim[], section: string): void {
+  for (const claim of claims) {
+    claim.usedInSections = [...new Set([...(claim.usedInSections ?? []), section])];
+  }
+}
+
+function reviewSummary(sectionClaims: Record<string, Claim[]>): string {
+  return Object.entries(sectionClaims)
+    .map(([section, claims]) => `- ${section}: ${claims.length} supporting claim(s)`)
+    .join("\n");
 }
 
 // Helpers

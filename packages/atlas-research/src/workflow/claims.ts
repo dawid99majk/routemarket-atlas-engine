@@ -65,7 +65,7 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
       if (material.trustLevel === "creator") {
         const sentences = material.content.split(/[.!?]\s+/);
         for (const sentence of sentences) {
-          const cleanSentence = sentence.trim();
+          const cleanSentence = sentence.trim().replace(/^#+\s*[^\r\n]+\s*/g, "").trim();
           if (cleanSentence.length < 40) continue;
           if (isMetaClaim(cleanSentence)) continue;
 

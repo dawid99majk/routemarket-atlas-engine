@@ -1,4 +1,4 @@
-import type { Poi, Recommendation, RouteProject, RouteTip } from "../../atlas-core/src/index.js";
+import type { Poi, Recommendation, RouteProject, RouteSummary, RouteTip } from "../../atlas-core/src/index.js";
 
 export type RouteMarketDraftPayload = {
   title: string;
@@ -26,11 +26,27 @@ export type RouteMarketDraftPayload = {
 };
 
 export type PreparedRouteMarketDraft = {
+  contractVersion: "2.0";
+  publishMode: "draft";
+  canImportToRouteMarket: boolean;
   project: RouteProject;
   draft: RouteMarketDraftPayload;
+  routeSummary?: RouteSummary;
+  guideText?: string;
   tips: RouteTip[];
   pois: Poi[];
   recommendations: Recommendation[];
+  mediaManifest?: unknown;
+  claimsSummary: {
+    total: number;
+    verified: number;
+    likely: number;
+    needsReview: number;
+  };
+  qualityGateResult: {
+    passed: boolean;
+    issues: Array<{ rule: string; message: string }>;
+  };
   gpx?: {
     path: string;
     attachMode: "gpx_xml";

@@ -3,6 +3,8 @@ import { readJsonFile, updateProjectStatus, writeJsonFile, type Claim, type Rout
 import type { ProjectArtifact } from "./artifacts.js";
 import { appendProjectEvent, listProjectEvents, type ProjectEvent } from "./events.js";
 import { assessProjectReadiness, type ReadinessReport } from "./readiness.js";
+import { approvalArtifactMap, hashImportantArtifacts } from "./artifact-hashes.js";
+import { readWorkflowState, type WorkflowState } from "./workflow-state.js";
 
 export type ReviewDecision = "approved" | "changes_requested" | "blocked";
 export type ApprovalDecision = "approved" | "changes_requested" | "rejected";
@@ -35,6 +37,17 @@ export type ProjectReviewBundle = {
   recommendedDecision: ReviewDecision;
   latestDecision?: ProjectReviewDecision;
   recentEvents: ProjectEvent[];
+  approvals: any;
+  workflowState: WorkflowState;
+  missingInputs: any;
+  artifactHashes: Record<string, string>;
+  qualityIssues: import("./quality-gates.js").QualityIssue[];
+  nextAction: {
+    type: "approve_stage" | "fix_blocking_inputs" | "prepare_publish" | "review" | "none";
+    label: string;
+    stage?: string;
+    blockingReason?: string;
+  };
 };
 
 export async function buildProjectReviewBundle(input: {
@@ -46,6 +59,9 @@ export async function buildProjectReviewBundle(input: {
 }): Promise<ProjectReviewBundle> {
   const readiness = assessProjectReadiness(input);
   const events = await listProjectEvents(input.project.folderPath);
+  const approvals = await readApprovals(input.project);
+  const missingInputs = await readMissingInputs(input.project);
+  const qualityIssues = input.qualityIssues ?? [];
 
   let recommendedDecision: ReviewDecision = "approved";
   if (readiness.blockingCount > 0) recommendedDecision = "blocked";
@@ -59,7 +75,13 @@ export async function buildProjectReviewBundle(input: {
     artifactSummary: summarizeArtifacts(input.artifacts),
     recommendedDecision,
     latestDecision: await readLatestReviewDecision(input.project),
-    recentEvents: events.slice(-10).reverse()
+    recentEvents: events.slice(-10).reverse(),
+    approvals,
+    workflowState: await readWorkflowState(input.project),
+    missingInputs,
+    artifactHashes: await hashImportantArtifacts(input.project),
+    qualityIssues,
+    nextAction: nextAction(readiness, approvals, missingInputs, qualityIssues)
   };
 }
 
@@ -108,12 +130,15 @@ export async function saveProjectApprovalDecision(input: {
     approvals = { projectId: input.project.id, updatedAt: "", approvals: [] };
   }
   
-  const record = {
+  const artifactHashes = await hashImportantArtifacts(input.project);
+  const record: any = {
     stage: input.stage,
     decision: input.decision,
     reviewer: input.reviewer ?? "human",
     notes: input.notes,
-    decidedAt: new Date().toISOString()
+    decidedAt: new Date().toISOString(),
+    artifactHashes: filterHashesForStage(input.stage, artifactHashes),
+    audit: {}
   };
 
   // Replace existing approval for this stage if it exists
@@ -137,35 +162,103 @@ export async function saveProjectApprovalDecision(input: {
         await writeJsonFile(summaryPath, summary);
       } catch {}
     } else if (input.stage === "poi_approval") {
+      let changedPoi = 0;
       const poiPath = join(input.project.folderPath, "poi.geojson");
       try {
         const geojson = await readJsonFile<any>(poiPath);
         for (const feature of geojson.features) {
           if (feature.properties.status === "suggested") {
             feature.properties.status = "confirmed";
+            changedPoi += 1;
           }
         }
         await writeJsonFile(poiPath, geojson);
       } catch {}
+      const candidatePath = join(input.project.folderPath, "poi_candidates.json");
+      try {
+        const candidates = await readJsonFile<any[]>(candidatePath);
+        for (const candidate of candidates) {
+          if (candidate.status === "suggested") {
+            candidate.status = "confirmed";
+            changedPoi += 1;
+          }
+        }
+        await writeJsonFile(candidatePath, candidates);
+      } catch {}
+      record.audit.changedPoi = changedPoi;
     } else if (input.stage === "claims_approval") {
       const claimsPath = join(input.project.folderPath, "claims.json");
       try {
         const claims = await readJsonFile<any[]>(claimsPath);
+        let verifiedClaims = 0;
+        let likelyClaims = 0;
+        let unchangedClaims = 0;
         for (const claim of claims) {
-          if (claim.status === "needs_creator_review" || claim.status === "uncertain") {
+          if (claim.status === "needs_creator_review" && hasCreatorSource(claim)) {
             claim.status = "verified";
+            claim.needsHumanReview = false;
+            verifiedClaims += 1;
+          } else if (claim.status === "uncertain" && (claim.sources?.length ?? 0) > 1) {
+            claim.status = "likely";
+            claim.needsHumanReview = true;
+            likelyClaims += 1;
+          } else {
+            unchangedClaims += 1;
           }
         }
         await writeJsonFile(claimsPath, claims);
+        record.audit.changedClaims = verifiedClaims + likelyClaims;
+        record.audit.verifiedClaims = verifiedClaims;
+        record.audit.likelyClaims = likelyClaims;
+        record.audit.unchangedClaims = unchangedClaims;
       } catch {}
     }
   }
+
+  record.artifactHashes = filterHashesForStage(input.stage, await hashImportantArtifacts(input.project));
+  approvals.updatedAt = new Date().toISOString();
+  await writeJsonFile(path, approvals);
 
   await appendProjectEvent(input.project.folderPath, {
     type: "review.approval",
     message: `Approval for ${input.stage}: ${input.decision}.`,
     data: record
   });
+}
+
+function hasCreatorSource(claim: any): boolean {
+  return Array.isArray(claim.sources) && claim.sources.some((source: string) => source.startsWith("mat_note") || source.startsWith("mat_document") || source.includes("note"));
+}
+
+function filterHashesForStage(stage: string, hashes: Record<string, string>): Record<string, string> {
+  const files = approvalArtifactMap[stage] ?? [];
+  return Object.fromEntries(files.map((file) => [file, hashes[file] ?? "missing"]));
+}
+
+async function readApprovals(project: RouteProject): Promise<any> {
+  try {
+    return await readJsonFile<any>(join(project.folderPath, "approvals.json"));
+  } catch {
+    return { projectId: project.id, approvals: [] };
+  }
+}
+
+async function readMissingInputs(project: RouteProject): Promise<any> {
+  try {
+    return await readJsonFile<any>(join(project.folderPath, "missing_inputs.json"));
+  } catch {
+    return { missing: [] };
+  }
+}
+
+function nextAction(readiness: ReadinessReport, approvals: any, missingInputs: any, qualityIssues: import("./quality-gates.js").QualityIssue[]): ProjectReviewBundle["nextAction"] {
+  if (missingInputs?.blocking) return { type: "fix_blocking_inputs", label: "Fix missing inputs", blockingReason: missingInputs.missing?.[0]?.message };
+  const stages = ["gpx_summary_approval", "claims_approval", "poi_approval", "concept_approval", "guide_outline_approval", "guide_final_approval"];
+  const missingStage = stages.find((stage) => !approvals?.approvals?.some((approval: any) => approval.stage === stage && approval.decision === "approved"));
+  if (missingStage) return { type: "approve_stage", label: `Approve ${missingStage}`, stage: missingStage };
+  if (qualityIssues.length > 0 || readiness.blockingCount > 0) return { type: "fix_blocking_inputs", label: "Resolve quality gates", blockingReason: qualityIssues[0]?.message };
+  if (readiness.status !== "ready") return { type: "review", label: "Review project warnings" };
+  return { type: "prepare_publish", label: "Prepare RouteMarket draft" };
 }
 
 export async function readLatestReviewDecision(project: RouteProject): Promise<ProjectReviewDecision | undefined> {

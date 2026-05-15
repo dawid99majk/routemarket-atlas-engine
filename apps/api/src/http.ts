@@ -10,6 +10,7 @@ import {
   AddGpxBodySchema,
   AddLinkBodySchema,
   AddNoteBodySchema,
+  RegisterExternalInputBodySchema,
   ArchiveProjectBodySchema,
   CollectSourcesBodySchema,
   DeepResearchBodySchema,
@@ -27,6 +28,7 @@ export type AtlasApiOptions = {
   apiToken?: string;
   logRequests?: boolean;
   maxJobs?: number;
+  maxPersistedLogs?: number;
 };
 
 type RouteParams = Record<string, string>;
@@ -53,7 +55,7 @@ type Route = {
 
 export function createAtlasApiServer(options: AtlasApiOptions): Server {
   const service = new AtlasWorkflowService({ rootDir: options.rootDir });
-  const jobs = new JobManager({ maxJobs: options.maxJobs });
+  const jobs = new JobManager({ maxJobs: options.maxJobs, maxPersistedLogs: options.maxPersistedLogs });
   const corsOrigin = options.corsOrigin ?? "*";
   const apiToken = options.apiToken;
   const logRequests = options.logRequests ?? false;
@@ -153,6 +155,10 @@ function createRoutes(): Route[] {
     route("POST", "/projects/:slug/inputs/links", async ({ req, params, service }) => {
       const body = AddLinkBodySchema.parse(await readJson(req));
       return service.addLink(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/inputs/external", async ({ req, params, service }) => {
+      const body = RegisterExternalInputBodySchema.parse(await readJson(req));
+      return service.registerExternalInput(params.slug, body);
     }),
     route("POST", "/projects/:slug/research-pack", async ({ req, params, service }) => {
       EmptyBodySchema.parse(await readJson(req));
@@ -384,6 +390,7 @@ function apiManifest(authEnabled: boolean) {
       "POST /projects/:slug/inputs/notes",
       "POST /projects/:slug/inputs/gpx",
       "POST /projects/:slug/inputs/links",
+      "POST /projects/:slug/inputs/external",
       "POST /projects/:slug/research-pack",
       "POST /projects/:slug/analyze-gpx",
       "POST /projects/:slug/deep-research",

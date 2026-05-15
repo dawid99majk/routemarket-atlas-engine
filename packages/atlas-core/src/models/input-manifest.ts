@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const InputItemTypeSchema = z.enum(["note", "document", "photo", "gpx", "link"]);
-export const InputItemStatusSchema = z.enum(["added", "processed", "ignored", "needs_review"]);
+export const InputItemStatusSchema = z.enum(["added", "processed", "ignored", "needs_review", "unsupported", "needs_parser"]);
 
 export const InputItemSchema = z.object({
   id: z.string(),
@@ -10,6 +10,8 @@ export const InputItemSchema = z.object({
   originalName: z.string(),
   mimeType: z.string(),
   sizeBytes: z.number().int().nonnegative(),
+  storageUrl: z.string().optional(),
+  storageKey: z.string().optional(),
   addedAt: z.string(),
   status: InputItemStatusSchema,
   notes: z.string().optional()

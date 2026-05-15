@@ -99,6 +99,24 @@ Allowed extension: `.gpx`. Max content size: 5 MB.
 
 Filenames are sanitized. Path traversal and wrong extensions return HTTP 400.
 
+### POST /projects/:slug/inputs/external
+
+Registers a file already stored by RouteMarket or another storage service. Atlas records metadata only and does not fetch the file.
+
+```json
+{
+  "type": "document",
+  "originalName": "roadbook.pdf",
+  "storageKey": "uploads/roadbook.pdf",
+  "mimeType": "application/pdf",
+  "sizeBytes": 1234
+}
+```
+
+Supported registration fields: `type`, `originalName`, `storageUrl`, `storageKey`, `mimeType`, `sizeBytes`, `note`.
+
+Unsupported formats are marked `unsupported`; formats that need a future parser are marked `needs_parser`.
+
 ## Research And GPX
 
 ### POST /projects/:slug/collect-sources
@@ -119,10 +137,12 @@ Analyzes GPX and writes:
 
 - `route_summary.json`
 - `route_segments.json`
+- `route_segments.geojson`
 - `route_warnings.json`
 - `elevation_profile.json`
 
 The analyzer does not infer season or surface unless data supports it. It records warnings for missing elevation, missing timestamps, invalid skipped points and suspiciously short tracks.
+If a GPX has no track points, Atlas falls back to route points and records that source in warnings.
 
 ### POST /projects/:slug/deep-research
 
@@ -202,7 +222,17 @@ Returns automated readiness status, score, checks and blocking/warning counts.
 
 ### GET /projects/:slug/review
 
-Returns project metadata, readiness, source summary, claim summary, artifact summary, latest decision and recent events.
+Returns project metadata, readiness, source summary, claim summary, artifact summary, approval state, missing inputs, quality issues, artifact hashes, latest decision, recent events and a compact `nextAction`.
+
+Example `nextAction`:
+
+```json
+{
+  "type": "approve_stage",
+  "label": "Approve claims_approval",
+  "stage": "claims_approval"
+}
+```
 
 ### POST /projects/:slug/review/decision
 
@@ -258,4 +288,15 @@ On failure:
 }
 ```
 
-Publish is blocked by missing inputs, weak guide text, missing approvals, missing GPX segments/warnings, unvalidated GPX summary, insufficient claims, weak source coverage or invalid POI coordinates.
+Publish is blocked by missing inputs, weak guide text, missing approvals, stale approvals, missing GPX segments/warnings, missing `route_segments.geojson`, unvalidated GPX summary, insufficient claims, weak source coverage or invalid POI coordinates.
+
+The payload contract is versioned:
+
+```json
+{
+  "contractVersion": "2.0",
+  "publishMode": "draft",
+  "canImportToRouteMarket": true,
+  "qualityGateResult": { "passed": true, "issues": [] }
+}
+```

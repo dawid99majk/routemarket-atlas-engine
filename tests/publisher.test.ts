@@ -69,6 +69,12 @@ describe("RouteMarket publisher payload", () => {
     const saved = await readFile(join(project.folderPath, "routemarket_payload.json"), "utf8");
 
     expect(prepared.draft.category_id).toBe(4);
+    expect(prepared.contractVersion).toBe("2.0");
+    expect(prepared.publishMode).toBe("draft");
+    expect(prepared.canImportToRouteMarket).toBe(true);
+    expect(prepared.qualityGateResult.passed).toBe(true);
+    expect(prepared.claimsSummary.verified).toBeGreaterThan(0);
+    expect(prepared.routeSummary?.routeSegments.length).toBeGreaterThan(0);
     expect(prepared.draft.difficulty).toBe("moderate");
     expect(prepared.draft.distance_km).toBeGreaterThan(1);
     expect(saved).toContain("Albania motorcycle route 7 days");

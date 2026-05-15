@@ -6,6 +6,7 @@ import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAtlasApiServer } from "../apps/api/src/http.js";
 import { JobManager } from "../apps/api/src/jobs.js";
+import { AtlasWorkflowService } from "../packages/atlas-workflow/src/index.js";
 import { AtlasClient, AtlasClientError } from "../packages/atlas-client/src/index.js";
 
 let tempRoots: string[] = [];
@@ -199,9 +200,17 @@ describe("Atlas API", () => {
     });
     await client.addGpx(created.id, { fileName: "route.gpx", content: gpxContent });
     await client.addLink(created.id, { url: "https://example.com/albania-route" });
+    const external = await client.registerExternalInput(created.id, {
+      type: "document",
+      originalName: "roadbook.pdf",
+      storageKey: "uploads/roadbook.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1234
+    });
     const pack = await client.buildResearchPack(created.id);
     const summary = await client.analyzeGpx(created.id);
 
+    expect(external.item.status).toBe("needs_parser");
     expect(pack.researchPack.materials.length).toBeGreaterThanOrEqual(2);
     expect(summary.routeSummary.routeSegments.length).toBeGreaterThan(0);
     await expect(client.addGpx(created.id, { fileName: "../bad.gpx", content: gpxContent })).rejects.toMatchObject({
@@ -263,6 +272,29 @@ describe("Atlas API", () => {
     const restored = second.get(started.id);
     expect(restored?.status).toBe("waiting_for_approval");
     expect(restored?.pendingApprovalContext.stage).toBe("gpx_summary_approval");
+  });
+
+  it("reports stale approval when claims change after approval", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "atlas-stale-"));
+    tempRoots.push(rootDir);
+    const server = createAtlasApiServer({ rootDir, corsOrigin: "*", apiToken: "secret" });
+    servers.push(server);
+    await listen(server);
+    const client = new AtlasClient({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, token: "secret" });
+    const created = await client.createProject({ topic: "Stale approval route", category: "motorcycle", region: "Albania" });
+    await client.writeProjectFile(created.id, "guide.md", "# Guide\n\n" + "This is a deliberately long guide body used only to reach readiness checks for stale approval testing. ".repeat(10));
+    await client.writeProjectFile(created.id, "quality_report.md", "# Quality\n");
+    const projectDir = join(rootDir, "routes", created.id);
+    await import("node:fs/promises").then(async ({ writeFile }) => {
+      await writeFile(join(projectDir, "claims.json"), JSON.stringify([{ id: "c1", topicId: created.id, claim: "Fuel is available before the route.", claimType: "logistics", confidence: 0.8, status: "needs_creator_review", sources: ["mat_note_1"], needsHumanReview: true }], null, 2));
+    });
+    const service = new AtlasWorkflowService({ rootDir });
+    await service.approveStage(created.id, "claims_approval", "approved");
+    await import("node:fs/promises").then(async ({ writeFile }) => {
+      await writeFile(join(projectDir, "claims.json"), JSON.stringify([{ id: "c1", topicId: created.id, claim: "Changed after approval.", claimType: "logistics", confidence: 0.8, status: "verified", sources: ["mat_note_1"], needsHumanReview: false }], null, 2));
+    });
+    const review = await client.getProjectReview(created.id);
+    expect(review.qualityIssues.some((issue: any) => issue.rule === "stale_approval_claims_approval")).toBe(true);
   });
 
   it("protects private endpoints when token is configured", async () => {

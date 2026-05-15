@@ -28,6 +28,7 @@ export const ClaimSchema = z.object({
   ]),
   sources: z.array(z.string()),
   evidenceQuotes: z.array(z.string()).optional(),
+  usedInSections: z.array(z.string()).optional(),
   needsHumanReview: z.boolean().default(false)
 });
 

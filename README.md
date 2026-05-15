@@ -52,10 +52,12 @@ Generated route outputs under `routes/*` are ignored by git. Fixtures belong in 
 - `research_pack.json`: normalized creator materials and source summaries.
 - `route_summary.json`: distance, elevation, timing estimate, loop type, validation status, route segments and warnings.
 - `route_segments.json`: GPX-derived route segment list.
+- `route_segments.geojson`: LineString segment geometry for map rendering and future 3D use.
 - `route_warnings.json`: missing elevation/timestamps, invalid skipped points, suspicious short tracks.
 - `claims.json`: factual route claims only. Meta-claims about sources are rejected.
 - `missing_inputs.json`: blocking report when guide or publish preparation cannot continue.
 - `approvals.json`: human approval records. Approval side effects update related artifacts.
+- `workflow_state.json`: current workflow step, waiting approval stage, completed steps and artifact hashes.
 - `guide.md`: final guide, only generated from sufficient verified inputs.
 - `routemarket_payload.json`: draft payload for RouteMarket handoff.
 
@@ -91,6 +93,7 @@ POST /projects
 POST /projects/:slug/inputs/notes
 POST /projects/:slug/inputs/gpx
 POST /projects/:slug/inputs/links
+POST /projects/:slug/inputs/external
 POST /projects/:slug/collect-sources
 POST /projects/:slug/research-pack
 POST /projects/:slug/analyze-gpx
@@ -104,6 +107,8 @@ POST /projects/:slug/prepare-publish
 
 Input endpoints accept JSON text payloads for now. Binary upload, OCR, camera/photo vision, mobile offline and RouteMarket frontend integration are intentionally out of scope for this sprint.
 
+`inputs/external` registers a file already stored by RouteMarket using `storageUrl` or `storageKey`; Atlas records metadata and marks unsupported or parser-needed formats without fetching private URLs.
+
 Full API contract: `docs/api_contract.md`.
 
 ## Quality Gates
@@ -115,7 +120,9 @@ Publish preparation is blocked when:
 - claims are missing, fake, uncertain or not approved,
 - GPX summary is not validated,
 - GPX-derived segments or warnings are missing,
+- `route_segments.geojson` is missing when a GPX exists,
 - final guide approval is missing,
+- an approval is stale because the approved artifact hash no longer matches current content,
 - the guide/description is too short,
 - the guide contains fallback text, TODOs, unknown placeholders or generic filler,
 - POI coordinates are invalid.
@@ -136,11 +143,14 @@ ATLAS_API_TOKEN=<long random internal token>
 ATLAS_CORS_ORIGIN=<RouteMarket app origin>
 ATLAS_LOG_REQUESTS=true
 ATLAS_MAX_JOBS=200
+ATLAS_MAX_PERSISTED_LOGS=500
 ATLAS_JOBS_DIR=<optional persistent job folder>
 BRAVE_SEARCH_API_KEY=<optional real search provider>
 ```
 
 If job persistence is enabled through the configured jobs directory, jobs waiting for approval survive API restarts.
+
+Persisted job logs are kept as JSONL next to job state. Old completed/failed jobs can be pruned through the jobs API.
 
 ## MCP
 

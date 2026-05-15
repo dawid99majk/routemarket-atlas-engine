@@ -4,6 +4,7 @@ import {
   createRouteProject,
   addInputLink,
   addInputText,
+  registerExternalInput,
   listRouteProjects,
   readJsonFile,
   readJsonFileWithSchema,
@@ -38,6 +39,7 @@ import { listAtlasCategories } from "./categories.js";
 import { filterProjects, type ProjectListFilters } from "./project-filters.js";
 import { assessProjectReadiness } from "./readiness.js";
 import { buildProjectReviewBundle, saveProjectReviewDecision, type ReviewDecision } from "./review.js";
+import { readWorkflowState, writeWorkflowState } from "./workflow-state.js";
 
 export type AtlasWorkflowOptions = {
   rootDir: string;
@@ -206,6 +208,25 @@ export class AtlasWorkflowService {
     return { project, item };
   }
 
+  async registerExternalInput(projectSlug: string, input: {
+    type: import("../../atlas-core/src/index.js").InputItemType;
+    originalName: string;
+    storageUrl?: string;
+    storageKey?: string;
+    mimeType: string;
+    sizeBytes: number;
+    note?: string;
+  }) {
+    const project = await this.loadProject(projectSlug);
+    const item = await registerExternalInput(project.folderPath, input);
+    await appendProjectEvent(project.folderPath, {
+      type: "input.external_registered",
+      message: `Registered external input: ${item.originalName}.`,
+      data: { item }
+    });
+    return { project, item };
+  }
+
   async buildResearchPack(projectSlug: string) {
     const project = await this.loadProject(projectSlug);
     const { buildResearchPack } = await import("../../atlas-research/src/index.js");
@@ -238,6 +259,11 @@ export class AtlasWorkflowService {
         type: `workflow.${currentStep}`,
         message,
         data: { progress: value, paused: !!waitContext }
+      });
+      await writeWorkflowState(project, {
+        currentStep,
+        waitingApprovalStage: waitContext?.stage,
+        nextStep: waitContext?.stage ? nextStepAfterStage(waitContext.stage) : undefined
       });
     };
 
@@ -406,6 +432,13 @@ export class AtlasWorkflowService {
     for (let i = startIndex; i < steps.length; i++) {
       const result = await steps[i].run() as any;
       if (result?.pause) return { project, status: "paused", step: steps[i].id, stage: result.stage };
+      const state = await readWorkflowState(project);
+      await writeWorkflowState(project, {
+        completedSteps: [...new Set([...state.completedSteps, steps[i].id])],
+        currentStep: steps[i].id,
+        waitingApprovalStage: undefined,
+        nextStep: steps[i + 1]?.id
+      });
     }
 
     onProgress?.({ message: "Workflow completed.", progress: 100, currentStep: "completed" });
@@ -479,12 +512,14 @@ export class AtlasWorkflowService {
   async approveStage(projectSlug: string, stage: string, decision: import("./review.js").ApprovalDecision, notes?: string) {
     const project = await this.loadProject(projectSlug);
     const { saveProjectApprovalDecision } = await import("./review.js");
-    return saveProjectApprovalDecision({
+    const result = await saveProjectApprovalDecision({
       project,
       stage,
       decision,
       notes
     });
+    await writeWorkflowState(project, { waitingApprovalStage: undefined, nextStep: nextStepAfterStage(stage) });
+    return result;
   }
 
   async exportProject(projectSlug: string) {
@@ -582,6 +617,9 @@ const allowedProjectFiles = new Set([
   "route_summary.json",
   "route_segments.json",
   "route_warnings.json",
+  "route_segments.geojson",
+  "workflow_state.json",
+  "input_manifest.json",
   "elevation_profile.json",
   "research/deep/source_001.txt",
   "research/deep/source_002.txt",
@@ -612,4 +650,16 @@ function getStageForStep(stepId: string): string | undefined {
     finalize: "media_approval"
   };
   return map[stepId];
+}
+
+function nextStepAfterStage(stage: string): string | undefined {
+  const nextStepMap: Record<string, string> = {
+    gpx_summary_approval: "claims",
+    claims_approval: "pois",
+    poi_approval: "concept",
+    concept_approval: "guide_outline",
+    guide_outline_approval: "guide",
+    guide_final_approval: "finalize"
+  };
+  return nextStepMap[stage];
 }

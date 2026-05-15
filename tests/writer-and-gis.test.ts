@@ -78,4 +78,27 @@ describe("writer and GIS helpers", () => {
     expect(motorcycleSummary.season).toBeUndefined();
     expect(motorcycleSummary.surfaceType).toBeUndefined();
   });
+
+  it("analyzes route-point GPX with single quotes and skips invalid points", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "atlas-rtept-"));
+    tempRoots.push(rootDir);
+    const project = await createRouteProject({
+      rootDir,
+      title: "Route point fallback",
+      category: "hiking",
+      region: "Albania",
+      language: "en"
+    });
+    const gpx = `<?xml version="1.0"?><gpx><rte>
+      <rtept lat='41.0000' lon='19.0000'><ele>100</ele></rtept>
+      <rtept lat='999' lon='19.0100'><ele>120</ele></rtept>
+      <rtept lat='41.0300' lon='19.0400'><ele>220</ele></rtept>
+    </rte></gpx>`;
+    await writeFile(join(project.folderPath, "route.gpx"), gpx, "utf8");
+    const summary = await analyzeGpx(project);
+
+    expect(summary.distanceKm).toBeGreaterThan(1);
+    expect(summary.warnings.some((warning) => warning.code === "route_points")).toBe(true);
+    expect(summary.warnings.some((warning) => warning.code === "invalid_points_skipped")).toBe(true);
+  });
 });

@@ -68,3 +68,15 @@ export const AddLinkBodySchema = z.object({
   url: z.string().url(),
   note: z.string().max(500).optional()
 });
+
+export const RegisterExternalInputBodySchema = z.object({
+  type: z.enum(["note", "document", "photo", "gpx", "link"]),
+  originalName: z.string().min(1).max(160),
+  storageUrl: z.string().url().optional(),
+  storageKey: z.string().min(1).max(500).optional(),
+  mimeType: z.string().min(1).max(120),
+  sizeBytes: z.number().int().nonnegative(),
+  note: z.string().max(500).optional()
+}).refine((value) => Boolean(value.storageUrl || value.storageKey), {
+  message: "storageUrl or storageKey is required"
+});

@@ -144,6 +144,28 @@ export function registerAtlasTools(server: McpServer): void {
   );
 
   server.registerTool(
+    "register_external_input",
+    {
+      description: "Register an externally stored input file by URL or storage key without fetching it.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string(),
+        type: z.enum(["note", "document", "photo", "gpx", "link"]),
+        originalName: z.string(),
+        storageUrl: z.string().optional(),
+        storageKey: z.string().optional(),
+        mimeType: z.string(),
+        sizeBytes: z.number().int().nonnegative(),
+        note: z.string().optional()
+      }
+    },
+    async (input) => {
+      const service = new AtlasWorkflowService({ rootDir: input.rootDir ?? process.cwd() });
+      return jsonToolResult(await service.registerExternalInput(input.project, input as any));
+    }
+  );
+
+  server.registerTool(
     "build_research_pack",
     {
       description: "Build research_pack.json from creator inputs, links, collected sources and deep research.",

@@ -112,6 +112,7 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
     segments: stats.routeSegments,
     updatedAt: now
   });
+  await writeJsonFile(join(project.folderPath, "route_segments.geojson"), buildSegmentsGeoJson(project.id, stats.segmentLines));
 
   return summary;
 }
@@ -119,13 +120,20 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
 function parseGpxPoints(xml: string): { points: GpxPoint[]; warnings: RouteWarning[] } {
   const points: GpxPoint[] = [];
   const warnings: RouteWarning[] = [];
-  const trkptRegex = /<trkpt\b([^>]*)>(.*?)<\/trkpt>/gis;
+  let source = "track_points";
+  let pointRegex = /<trkpt\b([^>]*)>(.*?)<\/trkpt>/gis;
+  if (!pointRegex.test(xml)) {
+    pointRegex = /<rtept\b([^>]*)>(.*?)<\/rtept>/gis;
+    source = "route_points";
+  }
+  pointRegex.lastIndex = 0;
   const attrRegex = /\b(lat|lon)=["']([^"']+)["']/gi;
   const eleRegex = /<ele>([^<]+)<\/ele>/;
   const timeRegex = /<time>([^<]+)<\/time>/;
 
   let match;
-  while ((match = trkptRegex.exec(xml)) !== null) {
+  let skipped = 0;
+  while ((match = pointRegex.exec(xml)) !== null) {
     const attrs = match[1];
     const values: Record<string, string> = {};
     let attrMatch;
@@ -133,7 +141,7 @@ function parseGpxPoints(xml: string): { points: GpxPoint[]; warnings: RouteWarni
     const lat = parseFloat(values.lat ?? "");
     const lon = parseFloat(values.lon ?? "");
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
-      warnings.push({ code: "invalid_point_skipped", message: "Skipped a GPX point with invalid coordinates." });
+      skipped += 1;
       continue;
     }
     const inner = match[2];
@@ -149,6 +157,8 @@ function parseGpxPoints(xml: string): { points: GpxPoint[]; warnings: RouteWarni
       time: timeMatch ? timeMatch[1] : undefined
     });
   }
+  warnings.push({ code: source, message: `Analyzed GPX using ${source === "track_points" ? "track points" : "route points"}.` });
+  if (skipped > 0) warnings.push({ code: "invalid_points_skipped", message: `Skipped ${skipped} GPX point(s) with invalid coordinates.` });
 
   return { points, warnings };
 }
@@ -159,6 +169,7 @@ function calculateStats(points: GpxPoint[]) {
   const elevationProfile: { d: number; e: number }[] = [];
   const warnings: RouteWarning[] = [];
   const routeSegments: RouteSegment[] = [];
+  const segmentLines: Array<RouteSegment & { coordinates: number[][]; pointCount: number }> = [];
   let segmentDistance = 0;
   let segmentGain = 0;
   const segmentSize = Math.max(1, Math.floor((points.length - 1) / 5));
@@ -185,12 +196,21 @@ function calculateStats(points: GpxPoint[]) {
 
     const isSegmentBoundary = (i + 1) % segmentSize === 0 || i === points.length - 2;
     if (isSegmentBoundary) {
-      routeSegments.push({
-        index: routeSegments.length + 1,
-        from: formatPoint(points[Math.max(0, i + 1 - segmentSize)]),
+      const index = routeSegments.length + 1;
+      const startIndex = Math.max(0, i + 1 - segmentSize);
+      const segmentPoints = points.slice(startIndex, i + 2);
+      const summary = {
+        index,
+        from: formatPoint(points[startIndex]),
         to: formatPoint(p2),
         distanceKm: Math.round(segmentDistance * 10) / 10,
         elevationGainM: Math.round(segmentGain)
+      };
+      routeSegments.push(summary);
+      segmentLines.push({
+        ...summary,
+        pointCount: segmentPoints.length,
+        coordinates: segmentPoints.map((point) => [point.lon, point.lat])
       });
       segmentDistance = 0;
       segmentGain = 0;
@@ -208,7 +228,29 @@ function calculateStats(points: GpxPoint[]) {
   if (!hasTime) warnings.push({ code: "missing_timestamps", message: "GPX does not contain timestamps, so duration is estimated by category." });
   if (distanceKm < 1) warnings.push({ code: "suspiciously_short_track", message: `GPX track is suspiciously short (${distanceKm.toFixed(2)} km).` });
 
-  return { distanceKm, elevationGainM, isLoop, hasElevation, hasTime, elapsedHours, elevationProfile, routeSegments, warnings };
+  return { distanceKm, elevationGainM, isLoop, hasElevation, hasTime, elapsedHours, elevationProfile, routeSegments, segmentLines, warnings };
+}
+
+function buildSegmentsGeoJson(projectId: string, segments: Array<RouteSegment & { coordinates: number[][]; pointCount: number }>) {
+  return {
+    type: "FeatureCollection",
+    properties: { projectId },
+    features: segments.map((segment) => ({
+      type: "Feature",
+      properties: {
+        index: segment.index,
+        distanceKm: segment.distanceKm,
+        elevationGainM: segment.elevationGainM ?? 0,
+        pointCount: segment.pointCount,
+        start: segment.from,
+        end: segment.to
+      },
+      geometry: {
+        type: "LineString",
+        coordinates: segment.coordinates
+      }
+    }))
+  };
 }
 
 function elapsedTimeHours(points: GpxPoint[]): number | undefined {

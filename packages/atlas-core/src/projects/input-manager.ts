@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, stat, copyFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
 import { readJsonFile, writeJsonFile } from "../storage/json.js";
-import type { InputManifest, InputItem, InputItemType } from "../models/input-manifest.js";
+import type { InputManifest, InputItem, InputItemType, InputItemStatus } from "../models/input-manifest.js";
 import { InputManifestSchema } from "../models/input-manifest.js";
 
 export async function loadInputManifest(folderPath: string): Promise<InputManifest> {
@@ -74,6 +74,38 @@ export async function addInputText(folderPath: string, input: {
   return item;
 }
 
+export async function registerExternalInput(folderPath: string, input: {
+  type: InputItemType;
+  originalName: string;
+  storageUrl?: string;
+  storageKey?: string;
+  mimeType: string;
+  sizeBytes: number;
+  note?: string;
+}): Promise<InputItem> {
+  if (!input.storageUrl && !input.storageKey) throw new Error("storageUrl or storageKey is required.");
+  const manifest = await loadInputManifest(folderPath);
+  const now = new Date().toISOString();
+  const fileName = basename(input.originalName).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const item: InputItem = {
+    id: `${input.type}_${Date.now()}`,
+    type: input.type,
+    path: input.storageKey ?? input.storageUrl ?? fileName,
+    originalName: fileName,
+    mimeType: input.mimeType,
+    sizeBytes: input.sizeBytes,
+    storageUrl: input.storageUrl,
+    storageKey: input.storageKey,
+    addedAt: now,
+    status: externalStatus(input.type, fileName, input.mimeType),
+    notes: input.note
+  };
+  manifest.items.push(item);
+  manifest.updatedAt = now;
+  await saveInputManifest(folderPath, manifest);
+  return item;
+}
+
 export async function addInputFile(folderPath: string, sourcePath: string, type: InputItemType, note?: string): Promise<InputItem> {
   const manifest = await loadInputManifest(folderPath);
   const now = new Date().toISOString();
@@ -103,6 +135,15 @@ export async function addInputFile(folderPath: string, sourcePath: string, type:
   manifest.updatedAt = now;
   await saveInputManifest(folderPath, manifest);
   return item;
+}
+
+function externalStatus(type: InputItemType, fileName: string, mimeType: string): InputItemStatus {
+  const ext = extname(fileName).toLowerCase();
+  if (type === "note" && [".md", ".txt"].includes(ext)) return "needs_parser";
+  if (type === "gpx" && ext === ".gpx") return "needs_parser";
+  if (type === "photo" && mimeType.startsWith("image/")) return "needs_review";
+  if (type === "document" && [".pdf", ".docx"].includes(ext)) return "needs_parser";
+  return "unsupported";
 }
 
 export function sanitizeInputFileName(fileName: string, allowedExtensions: string[]): string {
