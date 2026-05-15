@@ -1,235 +1,159 @@
 # RouteMarket Atlas Engine
 
-Internal route production engine for discovering high-potential route topics, building research packs, and preparing RouteMarket drafts.
+Backend production engine for RouteMarket Route Factory. Atlas turns creator input into a reviewed route product package: research pack, GPX facts, claims, guide, quality report and RouteMarket draft payload.
 
-## MVP 1
+Atlas is intentionally strict. The normal workflow pauses for human approvals and publish preparation is blocked when the project contains weak, missing or unvalidated route facts.
 
-- Demand Radar
-- Research Pack
-- Route project folder generation
-- Mock provider interfaces
-- Topic scoring
-- CLI
-- MCP server skeleton
-
-## Commands
+## Quick Start
 
 ```bash
 npm install
-npm run atlas -- discover --category motorcycle --region Albania --language en
-npm run atlas -- create-project --topic "Albania motorcycle route 7 days" --category motorcycle --region Albania --language en
-npm run atlas -- collect-sources --project albania-motorcycle-route-7-days --provider auto
-npm run atlas -- deep-research --project albania-motorcycle-route-7-days --source-limit 3
-npm run atlas -- write-brief --project albania-motorcycle-route-7-days
-npm run atlas -- write-concept --project albania-motorcycle-route-7-days
-npm run atlas -- write-guide --project albania-motorcycle-route-7-days
-npm run atlas -- quality-check --project albania-motorcycle-route-7-days
-npm run atlas -- prepare-publish --project albania-motorcycle-route-7-days
-npm run atlas -- run-mvp2 --project albania-motorcycle-route-7-days
-npm run atlas -- review --project albania-motorcycle-route-7-days
-npm run atlas -- review-decision --project albania-motorcycle-route-7-days --decision approved --reviewer "Atlas QA"
+npm run check
+npm test
+npm run demo:golden-route
+npm run atlas -- --help
 ```
 
-## Current CLI Commands
-
-- `discover`: writes `data/backlog.json`.
-- `create-project`: creates `routes/<slug>/`.
-- `collect-sources`: writes `sources.json` using `--provider auto | mock | brave`.
-- `deep-research`: enriches selected sources and writes `deep_research.json`.
-- `write-brief`: writes `brief.md`.
-- `write-concept`: writes `route_concept.md`.
-- `write-guide`: writes `guide.md`.
-- `quality-check`: writes `quality_report.md`.
-- `validate-gpx`: runs basic GPX validation.
-- `prepare-publish`: writes `routemarket_payload.json`.
-- `generate-claims`: writes `claims.json`.
-- `extract-pois`: writes `poi.geojson`.
-- `generate-tips`: writes `tips.json`.
-- `generate-recommendations`: writes `recommendations.json`.
-- `prepare-media`: writes `media/manifest.json` and `media/license_report.md`.
-- `write-review`: writes `review_checklist.md`.
-- `status`: shows local project status.
-- `run-mvp2`: runs the local MVP 2 pipeline for an existing project.
-- `review`: shows readiness, source, claim, artifact, and decision summary.
-- `review-decision`: saves a human review decision and updates project status.
-
-## API
-
-Atlas now includes a native HTTP API that can be embedded into a VPS setup and called by the future Lovable/RouteMarket application.
-
-Run locally:
+Run the HTTP API:
 
 ```bash
 npm run api
 ```
 
-Default URL:
+Default local URL:
 
 ```txt
 http://localhost:8787
 ```
 
-Useful endpoints:
+## Creator-Grade Flow
+
+1. Create a project in `routes/<slug>/`.
+2. Add creator notes, GPX text and links into the project input manifest.
+3. Collect external sources.
+4. Build `research_pack.json` from creator inputs, sources and deep research.
+5. Analyze GPX into `route_summary.json`, `route_segments.json`, `route_warnings.json` and `elevation_profile.json`.
+6. Generate claims from GPX facts and creator notes.
+7. Pause for approvals: GPX summary, claims, POI, concept, outline and final guide.
+8. Generate the final guide only when required facts are present.
+9. Run quality gates before `routemarket_payload.json` is prepared.
+
+The golden route demo shows the full approval path:
+
+```bash
+npm run demo:golden-route
+```
+
+Generated route outputs under `routes/*` are ignored by git. Fixtures belong in `fixtures/`.
+
+## Important Artifacts
+
+- `input_manifest.json`: creator-provided notes, GPX files, documents, photos and links.
+- `research_pack.json`: normalized creator materials and source summaries.
+- `route_summary.json`: distance, elevation, timing estimate, loop type, validation status, route segments and warnings.
+- `route_segments.json`: GPX-derived route segment list.
+- `route_warnings.json`: missing elevation/timestamps, invalid skipped points, suspicious short tracks.
+- `claims.json`: factual route claims only. Meta-claims about sources are rejected.
+- `missing_inputs.json`: blocking report when guide or publish preparation cannot continue.
+- `approvals.json`: human approval records. Approval side effects update related artifacts.
+- `guide.md`: final guide, only generated from sufficient verified inputs.
+- `routemarket_payload.json`: draft payload for RouteMarket handoff.
+
+## CLI
+
+Useful commands:
+
+```bash
+npm run atlas -- create-project --topic "Albania motorcycle route 7 days" --category motorcycle --region Albania --language en
+npm run atlas -- input-add-note --project albania-motorcycle-route-7-days --file ./notes.md
+npm run atlas -- input-add-gpx --project albania-motorcycle-route-7-days --file ./route.gpx
+npm run atlas -- input-add-link --project albania-motorcycle-route-7-days --url https://example.com/source
+npm run atlas -- build-research-pack --project albania-motorcycle-route-7-days
+npm run atlas -- analyze-gpx --project albania-motorcycle-route-7-days
+npm run atlas -- run-mvp2 --project albania-motorcycle-route-7-days
+npm run atlas -- approve --project albania-motorcycle-route-7-days --stage gpx_summary_approval --decision approved
+npm run atlas -- prepare-publish --project albania-motorcycle-route-7-days
+```
+
+`run-mvp2` pauses at missing approvals by default. Auto approval is reserved for explicit demo/development paths and is ignored in production mode.
+
+## API
+
+The API is designed for the future RouteMarket creator UI, where the frontend should not write files directly.
+
+Core endpoints:
 
 ```txt
 GET  /health
 GET  /version
-GET  /providers
-POST /discover
-GET  /categories
-GET  /dashboard
+GET  /manifest
 POST /projects
-GET  /projects
-GET  /projects/:slug
-GET  /projects/:slug/bundle
-GET  /projects/:slug/export
-POST /projects/:slug/archive
-GET  /projects/:slug/readiness
-GET  /projects/:slug/review
-POST /projects/:slug/review/decision
-PATCH /projects/:slug/status
+POST /projects/:slug/inputs/notes
+POST /projects/:slug/inputs/gpx
+POST /projects/:slug/inputs/links
 POST /projects/:slug/collect-sources
-POST /projects/:slug/deep-research
+POST /projects/:slug/research-pack
+POST /projects/:slug/analyze-gpx
 POST /projects/:slug/run-mvp2
 POST /projects/:slug/jobs/run-mvp2
-POST /projects/:slug/prepare-publish
-GET  /projects/:slug/artifacts
-GET  /projects/:slug/events
-GET  /jobs
-POST /jobs/prune
+POST /jobs/:id/approve
 GET  /jobs/:id
-GET  /jobs/:id/logs
-GET  /projects/:slug/files?path=guide.md
-PUT  /projects/:slug/files?path=guide.md
+GET  /projects/:slug/review
+POST /projects/:slug/prepare-publish
 ```
 
-For frontend use, prefer async jobs for longer workflows:
+Input endpoints accept JSON text payloads for now. Binary upload, OCR, camera/photo vision, mobile offline and RouteMarket frontend integration are intentionally out of scope for this sprint.
 
-```ts
-const started = await atlas.startRunMvp2Job("albania-motorcycle-route-7-days");
-const status = await atlas.getJob(started.job.id);
-const logs = await atlas.getJobLogs(started.job.id);
-const events = await atlas.listProjectEvents("albania-motorcycle-route-7-days");
-```
-
-VPS notes are in `docs/vps_integration.md`.
-
-API contract:
-
-```txt
-docs/api_contract.md
-```
-
-Deployment examples:
-
-```txt
-Dockerfile
-deploy/docker-compose.example.yml
-deploy/atlas-api.service.example
-deploy/production.env.example
-```
-
-For VPS use, set:
-
-```txt
-ATLAS_API_TOKEN=<long random internal token>
-ATLAS_CORS_ORIGIN=<your app origin>
-ATLAS_LOG_REQUESTS=true
-ATLAS_MAX_JOBS=200
-BRAVE_SEARCH_API_KEY=<optional real web search key>
-```
-
-Source collection providers:
-
-- `mock`: deterministic local fixtures for development and tests.
-- `auto`: uses Brave Search when `BRAVE_SEARCH_API_KEY` is set, otherwise falls back to `mock`.
-- `brave`: forces Brave Search and fails fast when the key is missing.
-
-Check provider status locally:
-
-```bash
-npm run atlas -- providers
-```
-
-## MVP 2 Local Pipeline
-
-After `collect-sources`, run:
-
-```bash
-npm run atlas -- run-mvp2 --project albania-motorcycle-route-7-days
-```
-
-This generates:
-
-- `claims.json`,
-- `poi.geojson`,
-- `route_concept.md`,
-- `guide.md`,
-- `tips.json`,
-- `recommendations.json`,
-- `media/manifest.json`,
-- `media/license_report.md`,
-- `quality_report.md`,
-- `review_checklist.md`,
-- `routemarket_payload.json`.
-
-Optional enrichment:
-
-```bash
-npm run atlas -- deep-research --project albania-motorcycle-route-7-days --source-limit 3
-```
-
-This writes `deep_research.json`, raw extracted text under `research/deep/`, marks processed sources, and appends extracted claims without overwriting human/deep research claims on later claim generation.
-
-## Project Lifecycle and Statuses
-
-Every RouteProject follows a strict lifecycle, tracked via a typed enum:
-
-- `research_needed`: Initial state, project created.
-- `sources_collected`: `collect-sources` and `deep-research` executed.
-- `draft_generated`: MVP2 workflow generated the content but it's not yet reviewed.
-- `ready_for_review`: Project passed Readiness Checks and Quality Gates, waiting for human approval.
-- `changes_requested`: Human reviewer requested changes.
-- `blocked`: Project cannot proceed due to critical issues or low quality.
-- `approved_for_publish`: Human reviewer approved the project.
-- `published`: RouteMarket ID assigned, published to live.
-- `archived`: Project abandoned or deprecated.
-
-**Note:** `draft_generated` means the AI finished generating files. `ready_for_review` means it also passed strict validation.
+Full API contract: `docs/api_contract.md`.
 
 ## Quality Gates
 
-Before you can call `prepare-publish`, the project must pass hard **Quality Gates**. The API will block publication (returning HTTP 422 `quality_gate_failed`) if:
+Publish preparation is blocked when:
 
-- Less than 3 sources are used.
-- No `official` or `map` source is included.
-- Any POI has `0,0` coordinates.
-- `guide.md` contains placeholder text (e.g. "needs validation").
-- The `quality_report.md` or `claims.json` is missing/insufficient.
-- All claims have the `uncertain` status.
-- The `route_summary.json` is explicitly marked as `needs_validation`.
+- blocking `missing_inputs.json` entries exist,
+- source coverage is too weak or lacks trusted map/official sources,
+- claims are missing, fake, uncertain or not approved,
+- GPX summary is not validated,
+- GPX-derived segments or warnings are missing,
+- final guide approval is missing,
+- the guide/description is too short,
+- the guide contains fallback text, TODOs, unknown placeholders or generic filler,
+- POI coordinates are invalid.
 
-## RouteMarket Publishing
+Approval side effects:
 
-`prepare-publish` does not publish automatically, and requires passing the Quality Gate. It prepares a structured payload that can be used with the RouteMarket MCP tools:
+- GPX approval marks `route_summary.json` as `validated`.
+- Claims approval upgrades eligible creator-review claims to `verified`.
+- POI approval marks suggested POI as confirmed.
+- Final guide approval is required before publish preparation.
 
-- `create_route_draft`,
-- `add_route_tip`,
-- `add_route_poi`,
-- `attach_gpx_to_route`,
-- `attach_image_to_route`,
-- `add_route_recommendation`.
+## VPS Configuration
 
-Atlas defaults to draft-first publishing. Human review remains required before setting a route to `published`.
+Production mode requires an API token and a restricted CORS origin:
 
-## AI & API Configuration
+```txt
+ATLAS_API_TOKEN=<long random internal token>
+ATLAS_CORS_ORIGIN=<RouteMarket app origin>
+ATLAS_LOG_REQUESTS=true
+ATLAS_MAX_JOBS=200
+ATLAS_JOBS_DIR=<optional persistent job folder>
+BRAVE_SEARCH_API_KEY=<optional real search provider>
+```
 
-To enable the real deep research provider and Google Places enrichment, set the following environment variables:
+If job persistence is enabled through the configured jobs directory, jobs waiting for approval survive API restarts.
 
-- `ANTHROPIC_API_KEY`: Enables Claude 3 Haiku for deep research extraction and claim aggregation.
-- `GOOGLE_MAPS_API_KEY` or `GOOGLE_API_KEY`: Enables Google Places API for real POI enrichment.
-- `BRAVE_SEARCH_API_KEY`: Enables Brave Search for real source collection.
+## MCP
+
+The MCP server exposes the current creator-grade flow: project creation, note/GPX/link input, research pack building, GPX analysis, workflow execution, review, stage approval, safe file reads and publish preparation.
+
+Run:
+
+```bash
+npm run mcp
+```
+
+Tool documentation: `docs/mcp_tools.md`.
 
 ## Quality Principle
 
-Atlas Engine should create fewer routes, but with stronger source coverage, clearer risk labeling, and better human review.
+Atlas should produce fewer route products, with stronger facts and clearer uncertainty. A blocked guide is better than a polished route that invents distance, surface, season or safety details.

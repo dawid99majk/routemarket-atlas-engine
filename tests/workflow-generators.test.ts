@@ -1,9 +1,9 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRouteProject, readJsonFile, updateProjectStatus, type MediaManifest, type RouteProject } from "../packages/atlas-core/src/index.js";
-import { collectSources, extractPois, generateClaims, runDeepResearch } from "../packages/atlas-research/src/index.js";
+import { buildResearchPack, collectSources, extractPois, generateClaims, runDeepResearch } from "../packages/atlas-research/src/index.js";
 import { generateRecommendations, generateRouteTips, prepareMediaPack, writeReviewChecklist } from "../packages/atlas-writer/src/index.js";
 
 let tempRoots: string[] = [];
@@ -25,6 +25,26 @@ describe("workflow generators", () => {
       language: "en"
     });
     const sources = await collectSources({ project });
+    await writeFile(
+      join(project.folderPath, "creator-note.md"),
+      "Fuel is only available in Shkoder before the mountain section, and riders should carry water for the remote valley. The road after heavy rain has dangerous rockfall risk and rough gravel sections.",
+      "utf8"
+    );
+    await writeFile(join(project.folderPath, "input_manifest.json"), JSON.stringify({
+      projectId: project.id,
+      updatedAt: new Date().toISOString(),
+      items: [{
+        id: "note_1",
+        type: "note",
+        path: "creator-note.md",
+        originalName: "creator-note.md",
+        mimeType: "text/markdown",
+        sizeBytes: 180,
+        addedAt: new Date().toISOString(),
+        status: "added"
+      }]
+    }, null, 2), "utf8");
+    await buildResearchPack(project);
     const claims = await generateClaims(project);
     const pois = await extractPois(project);
     const deepResearch = await runDeepResearch({ project, sourceLimit: 1 });

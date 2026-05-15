@@ -14,6 +14,18 @@ export const RouteSummarySchema = z.object({
   hasElevation: z.boolean().default(false),
   hasTime: z.boolean().default(false),
   isLoop: z.boolean().default(false),
+  routeSegments: z.array(z.object({
+    index: z.number().int().positive(),
+    from: z.string(),
+    to: z.string(),
+    distanceKm: z.number().nonnegative(),
+    elevationGainM: z.number().nonnegative().optional(),
+    estimatedTimeH: z.number().positive().optional()
+  })).default([]),
+  warnings: z.array(z.object({
+    code: z.string(),
+    message: z.string()
+  })).default([]),
   validationStatus: z.enum(["draft", "needs_validation", "validated"]).default("needs_validation"),
   updatedAt: z.string()
 });

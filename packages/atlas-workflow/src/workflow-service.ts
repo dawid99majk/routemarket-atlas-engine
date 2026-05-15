@@ -2,6 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   createRouteProject,
+  addInputLink,
+  addInputText,
   listRouteProjects,
   readJsonFile,
   readJsonFileWithSchema,
@@ -68,6 +70,12 @@ export type SubmitReviewDecisionRequest = {
 
 export type RunDeepResearchRequest = {
   sourceLimit?: number;
+};
+
+export type AddTextInputRequest = {
+  fileName: string;
+  content: string;
+  note?: string;
 };
 
 export type WorkflowProgress = {
@@ -162,7 +170,64 @@ export class AtlasWorkflowService {
   }
 
   async runMvp2(projectSlug: string) {
-    return this.runMvp2WithProgress(projectSlug, undefined, undefined, { autoApprove: true });
+    return this.runMvp2WithProgress(projectSlug);
+  }
+
+  async addNoteText(projectSlug: string, input: AddTextInputRequest) {
+    const project = await this.loadProject(projectSlug);
+    const item = await addInputText(project.folderPath, { ...input, type: "note" });
+    await appendProjectEvent(project.folderPath, {
+      type: "input.note_added",
+      message: `Added note input: ${item.originalName}.`,
+      data: { item }
+    });
+    return { project, item };
+  }
+
+  async addGpxText(projectSlug: string, input: AddTextInputRequest) {
+    const project = await this.loadProject(projectSlug);
+    const item = await addInputText(project.folderPath, { ...input, type: "gpx" });
+    await appendProjectEvent(project.folderPath, {
+      type: "input.gpx_added",
+      message: `Added GPX input: ${item.originalName}.`,
+      data: { item }
+    });
+    return { project, item };
+  }
+
+  async addLink(projectSlug: string, input: { url: string; note?: string }) {
+    const project = await this.loadProject(projectSlug);
+    const item = await addInputLink(project.folderPath, input.url, input.note);
+    await appendProjectEvent(project.folderPath, {
+      type: "input.link_added",
+      message: `Added link input: ${input.url}.`,
+      data: { item }
+    });
+    return { project, item };
+  }
+
+  async buildResearchPack(projectSlug: string) {
+    const project = await this.loadProject(projectSlug);
+    const { buildResearchPack } = await import("../../atlas-research/src/index.js");
+    const researchPack = await buildResearchPack(project);
+    await appendProjectEvent(project.folderPath, {
+      type: "research.pack_built",
+      message: `Built research pack with ${researchPack.materials.length} materials.`,
+      data: { materialCount: researchPack.materials.length }
+    });
+    return { project, researchPack };
+  }
+
+  async analyzeGpx(projectSlug: string) {
+    const project = await this.loadProject(projectSlug);
+    const { analyzeGpx } = await import("../../atlas-research/src/index.js");
+    const routeSummary = await analyzeGpx(project);
+    await appendProjectEvent(project.folderPath, {
+      type: "gpx.analyzed",
+      message: `Analyzed GPX route: ${routeSummary.distanceKm ?? 0} km.`,
+      data: { routeSummary }
+    });
+    return { project, routeSummary };
   }
 
   async runMvp2WithProgress(projectSlug: string, onProgress?: WorkflowProgressCallback, startStep?: string, options: { autoApprove?: boolean } = {}) {
@@ -177,7 +242,7 @@ export class AtlasWorkflowService {
     };
 
     const isApproved = async (stage: string) => {
-      if (options.autoApprove) return true;
+      if (options.autoApprove && process.env.NODE_ENV !== "production") return true;
       try {
         const approvals = await readJsonFile<any>(join(project.folderPath, "approvals.json"));
         return approvals.approvals.some((a: any) => a.stage === stage && a.decision === "approved");
@@ -304,6 +369,11 @@ export class AtlasWorkflowService {
           await prepareRouteMarketDraft(project);
           
           project = await updateProjectStatus(project, "draft_generated");
+          await appendProjectEvent(project.folderPath, {
+            type: "project.status_changed",
+            message: "Project status changed to draft_generated.",
+            data: { status: "draft_generated" }
+          });
         }
       }
     ];
@@ -508,6 +578,11 @@ const allowedProjectFiles = new Set([
   "routemarket_payload.json",
   "review_decision.json",
   "deep_research.json",
+  "research_pack.json",
+  "route_summary.json",
+  "route_segments.json",
+  "route_warnings.json",
+  "elevation_profile.json",
   "research/deep/source_001.txt",
   "research/deep/source_002.txt",
   "research/deep/source_003.txt",

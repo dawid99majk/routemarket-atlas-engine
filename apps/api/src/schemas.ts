@@ -51,3 +51,20 @@ export const PruneJobsBodySchema = z.object({
 export const ArchiveProjectBodySchema = z.object({
   reason: z.string().optional()
 });
+
+export const AddNoteBodySchema = z.object({
+  fileName: z.string().min(1).max(120),
+  content: z.string().min(1).max(1_000_000),
+  note: z.string().max(500).optional()
+});
+
+export const AddGpxBodySchema = z.object({
+  fileName: z.string().min(1).max(120),
+  content: z.string().min(1).max(5_000_000),
+  note: z.string().max(500).optional()
+});
+
+export const AddLinkBodySchema = z.object({
+  url: z.string().url(),
+  note: z.string().max(500).optional()
+});

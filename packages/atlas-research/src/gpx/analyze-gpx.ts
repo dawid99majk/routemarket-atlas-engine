@@ -15,6 +15,16 @@ type GpxPoint = {
   time?: string;
 };
 
+type RouteWarning = { code: string; message: string };
+type RouteSegment = {
+  index: number;
+  from: string;
+  to: string;
+  distanceKm: number;
+  elevationGainM?: number;
+  estimatedTimeH?: number;
+};
+
 export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
   const now = new Date().toISOString();
   // We check both the main project folder and the input/gpx folder
@@ -40,13 +50,16 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
   }
 
   const gpxContent = await readFile(gpxPath, "utf8");
-  const points = parseGpxPoints(gpxContent);
+  const parsed = parseGpxPoints(gpxContent);
+  const points = parsed.points;
+  const warnings: RouteWarning[] = [...parsed.warnings];
 
   if (points.length < 2) {
     throw new Error("GPX file contains too few points for analysis.");
   }
 
   const stats = calculateStats(points);
+  warnings.push(...stats.warnings);
   
   if (stats.distanceKm < 0.5) {
     const missing: MissingInputs = {
@@ -65,18 +78,18 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
 
   const summary: RouteSummary = {
     distanceKm: Math.round(stats.distanceKm * 10) / 10,
-    elevationGainM: Math.round(stats.elevationGainM),
-    estimatedTimeH: Math.round((stats.distanceKm / 15) * 10) / 10,
+    elevationGainM: stats.hasElevation ? Math.round(stats.elevationGainM) : undefined,
+    estimatedTimeH: estimateTime(project.category, stats.distanceKm, stats.elapsedHours),
     difficulty: inferDifficulty(stats),
     riskLevel: "unknown",
     loopType: stats.isLoop ? "loop" : "point_to_point",
-    season: "May-October",
-    startPoint: `Start in ${project.region} (lat: ${points[0].lat.toFixed(3)})`,
-    endPoint: stats.isLoop ? "Back to start" : `End in ${project.region} (lat: ${points[points.length - 1].lat.toFixed(3)})`,
-    surfaceType: "mixed",
+    startPoint: formatPoint(points[0]),
+    endPoint: stats.isLoop ? "Back to start" : formatPoint(points[points.length - 1]),
     hasElevation: stats.hasElevation,
     hasTime: stats.hasTime,
     isLoop: stats.isLoop,
+    routeSegments: stats.routeSegments,
+    warnings,
     validationStatus: "needs_validation",
     updatedAt: now
   };
@@ -89,39 +102,66 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
     points: stats.elevationProfile
   });
 
+  await writeJsonFile(join(project.folderPath, "route_warnings.json"), {
+    projectId: project.id,
+    warnings,
+    updatedAt: now
+  });
+  await writeJsonFile(join(project.folderPath, "route_segments.json"), {
+    projectId: project.id,
+    segments: stats.routeSegments,
+    updatedAt: now
+  });
+
   return summary;
 }
 
-function parseGpxPoints(xml: string): GpxPoint[] {
+function parseGpxPoints(xml: string): { points: GpxPoint[]; warnings: RouteWarning[] } {
   const points: GpxPoint[] = [];
-  const trkptRegex = /<trkpt\s+lat="([^"]+)"\s+lon="([^"]+)"[^>]*>(.*?)<\/trkpt>/gs;
+  const warnings: RouteWarning[] = [];
+  const trkptRegex = /<trkpt\b([^>]*)>(.*?)<\/trkpt>/gis;
+  const attrRegex = /\b(lat|lon)=["']([^"']+)["']/gi;
   const eleRegex = /<ele>([^<]+)<\/ele>/;
   const timeRegex = /<time>([^<]+)<\/time>/;
 
   let match;
   while ((match = trkptRegex.exec(xml)) !== null) {
-    const lat = parseFloat(match[1]);
-    const lon = parseFloat(match[2]);
-    const inner = match[3];
+    const attrs = match[1];
+    const values: Record<string, string> = {};
+    let attrMatch;
+    while ((attrMatch = attrRegex.exec(attrs)) !== null) values[attrMatch[1].toLowerCase()] = attrMatch[2];
+    const lat = parseFloat(values.lat ?? "");
+    const lon = parseFloat(values.lon ?? "");
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      warnings.push({ code: "invalid_point_skipped", message: "Skipped a GPX point with invalid coordinates." });
+      continue;
+    }
+    const inner = match[2];
     
     const eleMatch = eleRegex.exec(inner);
     const timeMatch = timeRegex.exec(inner);
+    const ele = eleMatch ? parseFloat(eleMatch[1]) : undefined;
 
     points.push({
       lat,
       lon,
-      ele: eleMatch ? parseFloat(eleMatch[1]) : undefined,
+      ele: ele !== undefined && Number.isFinite(ele) ? ele : undefined,
       time: timeMatch ? timeMatch[1] : undefined
     });
   }
 
-  return points;
+  return { points, warnings };
 }
 
 function calculateStats(points: GpxPoint[]) {
   let distanceKm = 0;
   let elevationGainM = 0;
   const elevationProfile: { d: number; e: number }[] = [];
+  const warnings: RouteWarning[] = [];
+  const routeSegments: RouteSegment[] = [];
+  let segmentDistance = 0;
+  let segmentGain = 0;
+  const segmentSize = Math.max(1, Math.floor((points.length - 1) / 5));
 
   for (let i = 0; i < points.length - 1; i++) {
     const p1 = points[i];
@@ -129,14 +169,31 @@ function calculateStats(points: GpxPoint[]) {
     
     const d = haversineDistance(p1.lat, p1.lon, p2.lat, p2.lon);
     distanceKm += d;
+    segmentDistance += d;
 
     if (p1.ele !== undefined && p2.ele !== undefined) {
       const diff = p2.ele - p1.ele;
-      if (diff > 0) elevationGainM += diff;
+      if (diff > 0) {
+        elevationGainM += diff;
+        segmentGain += diff;
+      }
     }
 
     if (i % Math.max(1, Math.floor(points.length / 50)) === 0) {
       elevationProfile.push({ d: Math.round(distanceKm * 10) / 10, e: Math.round(p1.ele ?? 0) });
+    }
+
+    const isSegmentBoundary = (i + 1) % segmentSize === 0 || i === points.length - 2;
+    if (isSegmentBoundary) {
+      routeSegments.push({
+        index: routeSegments.length + 1,
+        from: formatPoint(points[Math.max(0, i + 1 - segmentSize)]),
+        to: formatPoint(p2),
+        distanceKm: Math.round(segmentDistance * 10) / 10,
+        elevationGainM: Math.round(segmentGain)
+      });
+      segmentDistance = 0;
+      segmentGain = 0;
     }
   }
 
@@ -146,8 +203,41 @@ function calculateStats(points: GpxPoint[]) {
   const isLoop = startEndDist < 0.5 || startEndDist < distanceKm * 0.05;
   const hasElevation = points.some(p => p.ele !== undefined);
   const hasTime = points.some(p => p.time !== undefined);
+  const elapsedHours = elapsedTimeHours(points);
+  if (!hasElevation) warnings.push({ code: "missing_elevation", message: "GPX does not contain elevation data." });
+  if (!hasTime) warnings.push({ code: "missing_timestamps", message: "GPX does not contain timestamps, so duration is estimated by category." });
+  if (distanceKm < 1) warnings.push({ code: "suspiciously_short_track", message: `GPX track is suspiciously short (${distanceKm.toFixed(2)} km).` });
 
-  return { distanceKm, elevationGainM, isLoop, hasElevation, hasTime, elevationProfile };
+  return { distanceKm, elevationGainM, isLoop, hasElevation, hasTime, elapsedHours, elevationProfile, routeSegments, warnings };
+}
+
+function elapsedTimeHours(points: GpxPoint[]): number | undefined {
+  const first = points.find((p) => p.time)?.time;
+  const last = [...points].reverse().find((p) => p.time)?.time;
+  if (!first || !last) return undefined;
+  const start = Date.parse(first);
+  const end = Date.parse(last);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return undefined;
+  return Math.round(((end - start) / 3_600_000) * 10) / 10;
+}
+
+function estimateTime(category: string, distanceKm: number, elapsedHours?: number): number {
+  if (elapsedHours && elapsedHours > 0) return elapsedHours;
+  const speedByCategory: Record<string, number> = {
+    motorcycle: 45,
+    roadtrip: 55,
+    cycling: 18,
+    running: 8,
+    hiking: 4,
+    trekking: 3.5,
+    city_walk: 3.5
+  };
+  const speed = speedByCategory[category] ?? 5;
+  return Math.max(0.1, Math.round((distanceKm / speed) * 10) / 10);
+}
+
+function formatPoint(point: GpxPoint): string {
+  return `${point.lat.toFixed(5)}, ${point.lon.toFixed(5)}`;
 }
 
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {

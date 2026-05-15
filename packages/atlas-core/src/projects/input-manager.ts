@@ -1,4 +1,4 @@
-import { readFile, writeFile, stat, copyFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, stat, copyFile } from "node:fs/promises";
 import { join, basename, extname } from "node:path";
 import { readJsonFile, writeJsonFile } from "../storage/json.js";
 import type { InputManifest, InputItem, InputItemType } from "../models/input-manifest.js";
@@ -38,6 +38,42 @@ export async function addInputLink(folderPath: string, url: string, note?: strin
   return item;
 }
 
+export async function addInputText(folderPath: string, input: {
+  fileName: string;
+  content: string;
+  type: "note" | "gpx";
+  note?: string;
+}): Promise<InputItem> {
+  const fileName = sanitizeInputFileName(input.fileName, input.type === "gpx" ? [".gpx"] : [".md", ".txt"]);
+  const maxSize = input.type === "gpx" ? 5_000_000 : 1_000_000;
+  const sizeBytes = Buffer.byteLength(input.content, "utf8");
+  if (sizeBytes > maxSize) throw new Error(`Input is too large. Max size is ${maxSize} bytes.`);
+
+  const manifest = await loadInputManifest(folderPath);
+  const now = new Date().toISOString();
+  const targetSubDir = join("input", input.type === "gpx" ? "gpx" : "notes");
+  await mkdir(join(folderPath, targetSubDir), { recursive: true });
+  const targetPath = join(targetSubDir, fileName);
+  await writeFile(join(folderPath, targetPath), input.content, "utf8");
+
+  const item: InputItem = {
+    id: `${input.type}_${Date.now()}`,
+    type: input.type,
+    path: targetPath,
+    originalName: fileName,
+    mimeType: getMimeType(fileName),
+    sizeBytes,
+    addedAt: now,
+    status: "added",
+    notes: input.note
+  };
+
+  manifest.items.push(item);
+  manifest.updatedAt = now;
+  await saveInputManifest(folderPath, manifest);
+  return item;
+}
+
 export async function addInputFile(folderPath: string, sourcePath: string, type: InputItemType, note?: string): Promise<InputItem> {
   const manifest = await loadInputManifest(folderPath);
   const now = new Date().toISOString();
@@ -47,6 +83,7 @@ export async function addInputFile(folderPath: string, sourcePath: string, type:
   const absoluteTargetPath = join(folderPath, targetPath);
 
   // Copy file
+  await mkdir(join(folderPath, targetSubDir), { recursive: true });
   await copyFile(sourcePath, absoluteTargetPath);
   const fileStat = await stat(absoluteTargetPath);
 
@@ -66,6 +103,15 @@ export async function addInputFile(folderPath: string, sourcePath: string, type:
   manifest.updatedAt = now;
   await saveInputManifest(folderPath, manifest);
   return item;
+}
+
+export function sanitizeInputFileName(fileName: string, allowedExtensions: string[]): string {
+  const base = basename(fileName).replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (!base || base === "." || base === "..") throw new Error("Invalid filename.");
+  if (base !== fileName || fileName.includes("/") || fileName.includes("\\")) throw new Error("Invalid filename.");
+  const ext = extname(base).toLowerCase();
+  if (!allowedExtensions.includes(ext)) throw new Error(`Invalid file extension: ${ext || "(none)"}.`);
+  return base;
 }
 
 function getMimeType(fileName: string): string {

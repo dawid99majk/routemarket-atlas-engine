@@ -62,13 +62,15 @@ export class JobManager {
         try {
           const content = readFileSync(join(this.jobsDir, file), "utf8");
           const job: AtlasJob = JSON.parse(content);
-          if (job.status === "running" || job.status === "queued" || job.status === "waiting_for_approval") {
+          if (job.status === "running" || job.status === "queued") {
             job.status = "failed";
             job.error = "process_restarted";
             job.updatedAt = new Date().toISOString();
             this.persistJob(job);
           }
+          job.logs = this.readPersistedLogs(job.id);
           this.jobs.set(job.id, job);
+          if (job.projectSlug && job.status === "waiting_for_approval") this.locks.set(job.projectSlug, job.id);
         } catch (e) {
           console.error(`Failed to load job from ${file}`, e);
         }
@@ -92,6 +94,15 @@ export class JobManager {
       appendFileSync(join(this.jobsDir, `${id}.log.jsonl`), JSON.stringify(log) + "\\n", "utf8");
     } catch (e) {
       console.error(`Failed to persist log for job ${id}`, e);
+    }
+  }
+
+  private readPersistedLogs(id: string): AtlasJobLog[] {
+    try {
+      const content = readFileSync(join(this.jobsDir, `${id}.log.jsonl`), "utf8");
+      return content.split("\n").filter((line: string) => line.trim()).map((line: string) => JSON.parse(line));
+    } catch {
+      return [];
     }
   }
 
@@ -163,7 +174,7 @@ export class JobManager {
     
     try {
       const content = readFileSync(join(this.jobsDir, `${id}.log.jsonl`), "utf8");
-      return content.split("\\n").filter((l: string) => l.trim()).map((l: string) => JSON.parse(l));
+      return content.split("\n").filter((l: string) => l.trim()).map((l: string) => JSON.parse(l));
     } catch {
       return [];
     }

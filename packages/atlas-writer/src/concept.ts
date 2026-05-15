@@ -25,13 +25,11 @@ ${targetTraveler(input.project.category)}
 
 ## Proposed structure
 
-- Start: to be confirmed
-- Finish: to be confirmed
-- Distance: to be confirmed
-- Elevation gain: to be confirmed
-- Difficulty: to be confirmed
-- Surface: to be confirmed
-- Best season: to be confirmed
+- Start and finish: use validated GPX coordinates and editor-approved place names.
+- Distance and elevation: use the approved route summary only.
+- Difficulty: derive from distance, elevation, route category, and human review.
+- Surface and season: include only when creator notes or trusted sources support them.
+- Safety: separate verified route risks from general preparation advice.
 
 ## Key research basis
 

@@ -24,7 +24,16 @@ export async function writeGuideOutline(project: RouteProject): Promise<string> 
 
 export async function generateGuideDraft(input: { project: RouteProject; sources?: any[]; concept?: string }): Promise<string> {
   // Legacy method for MVP1 compatibility
-  const guide = `# ${input.project.title} (Draft)`;
+  const guide = `# ${input.project.title} (Draft)
+
+## Route overview
+
+This is an internal draft shell for ${input.project.category} route planning in ${input.project.region}. It is not a final RouteMarket guide.
+
+## Source coverage
+
+Current source count: ${input.sources?.length ?? 0}
+`;
   await writeFile(join(input.project.folderPath, "guide.md"), guide, "utf8");
   return guide;
 }
@@ -51,7 +60,7 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
     }
   }
   
-  if (!pack || pack.materials.length === 0) {
+  if (!pack || pack.materials.filter((m: any) => m.status === "active" || m.status === "usable").length === 0) {
     missing.push({ code: "missing_research", message: "Research pack is missing or empty.", requiredFor: "guide_final" });
   }
 
@@ -63,6 +72,10 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
   const outlineApproved = approvals?.approvals.some((a: any) => a.stage === "guide_outline_approval" && a.decision === "approved");
   if (!outlineApproved) {
     missing.push({ code: "missing_outline_approval", message: "Guide outline must be approved before final guide generation.", requiredFor: "guide_final" });
+  }
+
+  if (!concept || isWeakConcept(concept)) {
+    missing.push({ code: "missing_route_concept", message: "A real route concept is required before final guide generation.", requiredFor: "guide_final" });
   }
 
   if (missing.length > 0) {
@@ -83,25 +96,115 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
     await unlink(join(project.folderPath, "missing_inputs.json"));
   } catch {}
 
+  const warnings = summary!.warnings ?? [];
+  const segments = summary!.routeSegments ?? [];
+  const trustedMaterials = pack!.materials.filter((m: any) => m.status === "active" || m.status === "usable");
   const guide = `# ${project.title}
 
 ## Quick facts
 - Distance: ${summary!.distanceKm} km
-- Elevation: ${summary!.elevationGainM} m
-- Surface: ${summary!.surfaceType}
+- Elevation gain: ${summary!.elevationGainM ?? "not provided in GPX"} m
+- Estimated time: ${summary!.estimatedTimeH} h
+- Difficulty: ${summary!.difficulty ?? "requires editor classification"}
+- Loop type: ${summary!.loopType ?? "not classified"}
+- Start: ${summary!.startPoint}
+- Finish: ${summary!.endPoint}
 
-## Overview
-${concept || "This route covers..."}
+## Target audience
 
-## Detailed Points
-${pois.map(p => `### ${p.name}\n${p.description}`).join("\n\n")}
+${targetAudience(project.category)}
 
-## Tips
-${claims.filter(c => c.status === "verified").map(c => `- ${c.claim}`).join("\n")}
+## Route value
+
+${extractConceptSection(concept!, "Route promise")}
+
+## Route overview
+
+This guide is based on validated GPX facts, creator materials and reviewed route claims. The route covers ${summary!.distanceKm} km in ${project.region}, with ${summary!.isLoop ? "a loop format" : "a point-to-point format"}.
+
+## Segment description
+
+${segments.length ? segments.map(segment => `### Segment ${segment.index}: ${segment.from} to ${segment.to}
+
+- Distance: ${segment.distanceKm} km
+- Elevation gain: ${segment.elevationGainM ?? 0} m
+- Estimated time: ${segment.estimatedTimeH ?? "category estimate included in total"} h`).join("\n\n") : "- Segment data is not available."}
+
+## Points of interest
+
+${pois.length ? pois.map(p => `### ${p.name}\n\n${p.description ?? "Approved point of interest on the route."}`).join("\n\n") : "- No approved POI have been attached yet."}
+
+## Logistics
+
+${claimsByType(claims, ["logistics", "distance", "access"])}
+
+## Safety
+
+${claimsByType(claims, ["safety", "legal"])}
+
+## Season notes
+
+${claimsByType(claims, ["season"])}
+
+## Preparation
+
+- Download the GPX before departure.
+- Check weather, road or trail closures, and local access rules before starting.
+- Carry backup navigation and enough water, food, fuel or battery for the route category.
+
+## Variants
+
+- Shorten the route at a verified settlement, trailhead or road junction before committing to remote sections.
+- Extend only after validating extra GPX distance, surface and daylight.
+
+## Sources
+
+${trustedMaterials.map((material: any) => `- ${material.title}${material.sourceUrl ? ` (${material.sourceUrl})` : ""}`).join("\n")}
+
+## Warnings and validation notes
+
+${warnings.length ? warnings.map((warning: any) => `- ${warning.message}`).join("\n") : "- No GPX warnings were produced during analysis."}
+
+## Disclaimer
+
+This guide is an editorial navigation aid, not a guarantee of access, safety, weather, legality or current field conditions. Verify critical facts before publishing and before travel.
 `;
 
   await writeFile(join(project.folderPath, "guide.md"), guide, "utf8");
   return guide;
+}
+
+function isWeakConcept(concept: string): boolean {
+  const lower = concept.toLowerCase();
+  return concept.trim().length < 250 || lower.includes("concept status: not designed") || lower.includes("to be confirmed");
+}
+
+function targetAudience(category: string): string {
+  const audiences: Record<string, string> = {
+    motorcycle: "Adventure motorcyclists who need route shape, surface risk, fuel awareness and offline navigation confidence.",
+    hiking: "Independent hikers who need realistic timing, terrain notes, water planning and safety context.",
+    cycling: "Cyclists who need distance, elevation, surface expectations and reliable logistics.",
+    city_walk: "Self-guided walkers who want a coherent route with worthwhile stops and simple navigation.",
+    roadtrip: "Drivers who want scenic flow, practical stops and realistic time planning."
+  };
+  return audiences[category] ?? "Travelers who need a practical, verified route guide.";
+}
+
+function extractConceptSection(concept: string, heading: string): string {
+  const lines = concept.split(/\r?\n/);
+  const index = lines.findIndex((line) => line.trim().toLowerCase() === `## ${heading}`.toLowerCase());
+  if (index === -1) return "The route value is described in the approved route concept.";
+  const collected: string[] = [];
+  for (const line of lines.slice(index + 1)) {
+    if (line.startsWith("## ")) break;
+    if (line.trim()) collected.push(line.trim());
+  }
+  return collected.join(" ") || "The route value is described in the approved route concept.";
+}
+
+function claimsByType(claims: Claim[], types: Claim["claimType"][]): string {
+  const selected = claims.filter((claim) => (claim.status === "verified" || claim.status === "likely") && types.includes(claim.claimType));
+  return selected.length ? selected.map((claim) => `- ${claim.claim}`).join("\n") : "- No reviewed facts in this category yet.";
 }
 
 // Helpers

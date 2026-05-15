@@ -34,6 +34,12 @@ export type DeepResearchOptions = {
   sourceLimit?: number;
 };
 
+export type TextInputRequest = {
+  fileName: string;
+  content: string;
+  note?: string;
+};
+
 export type ReviewDecisionRequest = {
   decision: "approved" | "changes_requested" | "blocked";
   reviewer?: string;
@@ -128,6 +134,26 @@ export class AtlasClient {
 
   collectSources(slug: string, options: CollectSourcesOptions = {}): Promise<any> {
     return this.request("POST", `/projects/${encodeURIComponent(slug)}/collect-sources`, options);
+  }
+
+  addNote(slug: string, input: TextInputRequest): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/notes`, input);
+  }
+
+  addGpx(slug: string, input: TextInputRequest): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/gpx`, input);
+  }
+
+  addLink(slug: string, input: { url: string; note?: string }): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/links`, input);
+  }
+
+  buildResearchPack(slug: string): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/research-pack`, {});
+  }
+
+  analyzeGpx(slug: string): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/analyze-gpx`, {});
   }
 
   runDeepResearch(slug: string, options: DeepResearchOptions = {}): Promise<any> {

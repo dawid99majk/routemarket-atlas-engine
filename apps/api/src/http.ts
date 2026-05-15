@@ -7,6 +7,9 @@ import {
   CreateProjectBodySchema,
   DiscoverBodySchema,
   EmptyBodySchema,
+  AddGpxBodySchema,
+  AddLinkBodySchema,
+  AddNoteBodySchema,
   ArchiveProjectBodySchema,
   CollectSourcesBodySchema,
   DeepResearchBodySchema,
@@ -139,6 +142,26 @@ function createRoutes(): Route[] {
       const body = CollectSourcesBodySchema.parse(await readJson(req));
       return { sources: await service.collectSources(params.slug, body) };
     }),
+    route("POST", "/projects/:slug/inputs/notes", async ({ req, params, service }) => {
+      const body = AddNoteBodySchema.parse(await readJson(req));
+      return service.addNoteText(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/inputs/gpx", async ({ req, params, service }) => {
+      const body = AddGpxBodySchema.parse(await readJson(req));
+      return service.addGpxText(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/inputs/links", async ({ req, params, service }) => {
+      const body = AddLinkBodySchema.parse(await readJson(req));
+      return service.addLink(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/research-pack", async ({ req, params, service }) => {
+      EmptyBodySchema.parse(await readJson(req));
+      return service.buildResearchPack(params.slug);
+    }),
+    route("POST", "/projects/:slug/analyze-gpx", async ({ req, params, service }) => {
+      EmptyBodySchema.parse(await readJson(req));
+      return service.analyzeGpx(params.slug);
+    }),
     route("POST", "/projects/:slug/deep-research", async ({ req, params, service }) => {
       const body = DeepResearchBodySchema.parse(await readJson(req));
       return service.runDeepResearch(params.slug, body);
@@ -176,7 +199,9 @@ function createRoutes(): Route[] {
         "guide_outline_approval": "guide",
         "guide_final_approval": "finalize"
       };
-      const nextStep = nextStepMap[job.currentStep ?? ""] ?? "input";
+      const stage = job.currentStep ?? "";
+      await service.approveStage(projectSlug, stage, "approved", "Approved through job resume endpoint.");
+      const nextStep = nextStepMap[stage] ?? "input";
 
       jobs.resume(params.id, body.approvalData, (update) => 
         service.runMvp2WithProgress(projectSlug, update, nextStep)
@@ -312,6 +337,10 @@ function sendError(res: ServerResponse, error: unknown): void {
     return;
   }
   const message = error instanceof Error ? error.message : "Unknown error";
+  if (message.startsWith("Invalid filename") || message.startsWith("Invalid file extension") || message.includes("too large")) {
+    sendJson(res, 400, { error: message, code: "bad_request" });
+    return;
+  }
   sendJson(res, 500, { error: message, code: "internal_error" });
 }
 
@@ -352,6 +381,11 @@ function apiManifest(authEnabled: boolean) {
       "GET /projects/:slug/artifacts",
       "GET /projects/:slug/events",
       "POST /projects/:slug/collect-sources",
+      "POST /projects/:slug/inputs/notes",
+      "POST /projects/:slug/inputs/gpx",
+      "POST /projects/:slug/inputs/links",
+      "POST /projects/:slug/research-pack",
+      "POST /projects/:slug/analyze-gpx",
       "POST /projects/:slug/deep-research",
       "POST /projects/:slug/run-mvp2",
       "POST /projects/:slug/jobs/run-mvp2",

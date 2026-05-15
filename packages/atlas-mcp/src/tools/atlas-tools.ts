@@ -10,7 +10,8 @@ import {
 } from "../../../atlas-core/src/index.js";
 import { validateGeoJsonFile, validateGpxFile } from "../../../atlas-gis/src/index.js";
 import { prepareRouteMarketDraft } from "../../../atlas-publisher/src/index.js";
-import { collectSources, discoverDemand, extractPois, generateClaims } from "../../../atlas-research/src/index.js";
+import { analyzeGpx, buildResearchPack, collectSources, discoverDemand, extractPois, generateClaims } from "../../../atlas-research/src/index.js";
+import { AtlasWorkflowService } from "../../../atlas-workflow/src/index.js";
 import {
   generateGuideDraft,
   generateRecommendations,
@@ -86,6 +87,158 @@ export function registerAtlasTools(server: McpServer): void {
       const routeProject = await readJsonFile<RouteProject>(join(routesPath(rootDir, input.project), "project.json"));
       const sources = await collectSources({ project: routeProject, limit: input.limit });
       return jsonToolResult({ project: routeProject.id, sources });
+    }
+  );
+
+  server.registerTool(
+    "add_note",
+    {
+      description: "Add creator note text to an existing route project input manifest.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string(),
+        fileName: z.string(),
+        content: z.string(),
+        note: z.string().optional()
+      }
+    },
+    async (input) => {
+      const service = new AtlasWorkflowService({ rootDir: input.rootDir ?? process.cwd() });
+      return jsonToolResult(await service.addNoteText(input.project, input));
+    }
+  );
+
+  server.registerTool(
+    "add_gpx_text",
+    {
+      description: "Add GPX XML text to an existing route project input manifest.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string(),
+        fileName: z.string(),
+        content: z.string(),
+        note: z.string().optional()
+      }
+    },
+    async (input) => {
+      const service = new AtlasWorkflowService({ rootDir: input.rootDir ?? process.cwd() });
+      return jsonToolResult(await service.addGpxText(input.project, input));
+    }
+  );
+
+  server.registerTool(
+    "add_link",
+    {
+      description: "Add a creator/source link to an existing route project input manifest.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string(),
+        url: z.string(),
+        note: z.string().optional()
+      }
+    },
+    async (input) => {
+      const service = new AtlasWorkflowService({ rootDir: input.rootDir ?? process.cwd() });
+      return jsonToolResult(await service.addLink(input.project, { url: input.url, note: input.note }));
+    }
+  );
+
+  server.registerTool(
+    "build_research_pack",
+    {
+      description: "Build research_pack.json from creator inputs, links, collected sources and deep research.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string()
+      }
+    },
+    async (input) => {
+      const rootDir = input.rootDir ?? process.cwd();
+      const routeProject = await readJsonFile<RouteProject>(join(routesPath(rootDir, input.project), "project.json"));
+      const researchPack = await buildResearchPack(routeProject);
+      return jsonToolResult({ project: routeProject.id, researchPack });
+    }
+  );
+
+  server.registerTool(
+    "analyze_gpx",
+    {
+      description: "Analyze project GPX input and write route_summary.json, route_segments.json and route_warnings.json.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string()
+      }
+    },
+    async (input) => {
+      const rootDir = input.rootDir ?? process.cwd();
+      const routeProject = await readJsonFile<RouteProject>(join(routesPath(rootDir, input.project), "project.json"));
+      const routeSummary = await analyzeGpx(routeProject);
+      return jsonToolResult({ project: routeProject.id, routeSummary });
+    }
+  );
+
+  server.registerTool(
+    "run_workflow",
+    {
+      description: "Run the creator-grade workflow. It pauses at required approvals by default.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string()
+      }
+    },
+    async (input) => {
+      const service = new AtlasWorkflowService({ rootDir: input.rootDir ?? process.cwd() });
+      return jsonToolResult(await service.runMvp2WithProgress(input.project));
+    }
+  );
+
+  server.registerTool(
+    "get_review",
+    {
+      description: "Read the current project review bundle, readiness, quality issues and latest decision.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string()
+      }
+    },
+    async (input) => {
+      const service = new AtlasWorkflowService({ rootDir: input.rootDir ?? process.cwd() });
+      return jsonToolResult(await service.getReview(input.project));
+    }
+  );
+
+  server.registerTool(
+    "approve_stage",
+    {
+      description: "Approve, reject, or request changes for a workflow stage and apply approval side effects.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string(),
+        stage: z.string(),
+        decision: z.enum(["approved", "changes_requested", "rejected"]).default("approved"),
+        notes: z.string().optional()
+      }
+    },
+    async (input) => {
+      const service = new AtlasWorkflowService({ rootDir: input.rootDir ?? process.cwd() });
+      await service.approveStage(input.project, input.stage, input.decision as any, input.notes);
+      return jsonToolResult({ project: input.project, stage: input.stage, decision: input.decision });
+    }
+  );
+
+  server.registerTool(
+    "read_project_file",
+    {
+      description: "Read a safe known artifact from a route project.",
+      inputSchema: {
+        rootDir: z.string().optional(),
+        project: z.string(),
+        file: z.string()
+      }
+    },
+    async (input) => {
+      const service = new AtlasWorkflowService({ rootDir: input.rootDir ?? process.cwd() });
+      return jsonToolResult({ path: input.file, content: await service.readProjectFile(input.project, input.file) });
     }
   );
 

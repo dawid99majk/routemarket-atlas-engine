@@ -67,6 +67,7 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
         for (const sentence of sentences) {
           const cleanSentence = sentence.trim();
           if (cleanSentence.length < 40) continue;
+          if (isMetaClaim(cleanSentence)) continue;
 
           const claimType = classifySentence(cleanSentence);
           if (!claimType) continue;
@@ -112,6 +113,12 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
 
   await writeJsonFile(claimsPath, claims);
   return claims;
+}
+
+function isMetaClaim(sentence: string): boolean {
+  const low = sentence.toLowerCase();
+  return /\b(source|article|blog|website|page|video|material|document)\b/.test(low)
+    && /\b(contains|provides|describes|mentions|explains|lists|includes|covers)\b/.test(low);
 }
 
 function classifySentence(s: string): string | undefined {
