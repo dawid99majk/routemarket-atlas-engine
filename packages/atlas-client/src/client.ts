@@ -230,6 +230,10 @@ export class AtlasClient {
   }
 }
 
+export const RouteMarketAtlasClient = AtlasClient;
+export const MagicAiAtlasClient = AtlasClient;
+export const RouteMarketAtlasApiClient = AtlasClient;
+
 export class AtlasClientError extends Error {
   constructor(
     public readonly status: number,

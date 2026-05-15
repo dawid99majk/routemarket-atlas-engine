@@ -7,6 +7,7 @@ import { buildResearchPack, generateClaims, analyzeGpx } from "../packages/atlas
 import { getRouteMarketCategoryId, prepareRouteMarketDraft } from "../packages/atlas-publisher/src/index.js";
 import { generateGuideV2, generateQualityReport, generateRecommendations, generateRouteConcept, generateRouteTips, prepareMediaPack, writeGuideOutline, writeReviewChecklist } from "../packages/atlas-writer/src/index.js";
 import { saveProjectApprovalDecision } from "../packages/atlas-workflow/src/index.js";
+import { checkQualityGates } from "../packages/atlas-workflow/src/quality-gates.js";
 
 let tempRoots: string[] = [];
 
@@ -69,14 +70,52 @@ describe("RouteMarket publisher payload", () => {
     const saved = await readFile(join(project.folderPath, "routemarket_payload.json"), "utf8");
 
     expect(prepared.draft.category_id).toBe(4);
-    expect(prepared.contractVersion).toBe("2.0");
+    expect(prepared.contractVersion).toBe("2.1");
     expect(prepared.publishMode).toBe("draft");
     expect(prepared.canImportToRouteMarket).toBe(true);
+    expect(prepared.creationSource).toBe("atlas_ai");
+    expect(prepared.draftOnlyMode).toBe(true);
+    expect(prepared.payloadId).toHaveLength(16);
+    expect(prepared.generatedAt).toMatch(/T/);
+    expect(prepared.importReadiness.canImportToRouteMarket).toBe(true);
+    expect(prepared.importReadiness.blockingReasons).toEqual([]);
+    expect(prepared.importPolicy.importNeverPublishes).toBe(true);
+    expect(prepared.importPolicy.preserveManualEditsByDefault).toBe(true);
+    expect(Object.keys(prepared.sourceArtifactHashes).length).toBeGreaterThan(0);
     expect(prepared.qualityGateResult.passed).toBe(true);
     expect(prepared.claimsSummary.verified).toBeGreaterThan(0);
     expect(prepared.routeSummary?.routeSegments.length).toBeGreaterThan(0);
     expect(prepared.draft.difficulty).toBe("moderate");
     expect(prepared.draft.distance_km).toBeGreaterThan(1);
     expect(saved).toContain("Albania motorcycle route 7 days");
+    expect(saved).toContain('"creationSource": "atlas_ai"');
+    expect(saved).toContain('"publishMode": "draft"');
+  });
+
+  it("blocks legacy guide draft from passing quality gates", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "atlas-legacy-guide-"));
+    tempRoots.push(rootDir);
+    const project = await createRouteProject({
+      rootDir,
+      title: "Legacy guide route",
+      category: "motorcycle",
+      region: "Albania",
+      language: "en"
+    });
+
+    await writeFile(join(project.folderPath, "guide.md"), `# Legacy guide
+
+This route covers...
+
+- Distance: needs GPX validation
+- Duration: needs validation
+- Surface: needs confirmation
+`, "utf8");
+    await writeFile(join(project.folderPath, "sources.json"), JSON.stringify([], null, 2), "utf8");
+    await writeFile(join(project.folderPath, "claims.json"), JSON.stringify([], null, 2), "utf8");
+    await writeFile(join(project.folderPath, "approvals.json"), JSON.stringify({ projectId: project.id, approvals: [] }, null, 2), "utf8");
+
+    const issues = await checkQualityGates(project);
+    expect(issues.some((issue) => issue.rule === "placeholder_in_guide")).toBe(true);
   });
 });

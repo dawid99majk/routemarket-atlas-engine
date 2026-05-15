@@ -38,6 +38,7 @@ import { buildProjectExportBundle } from "./export.js";
 import { listAtlasCategories } from "./categories.js";
 import { filterProjects, type ProjectListFilters } from "./project-filters.js";
 import { assessProjectReadiness } from "./readiness.js";
+import { buildImportReadiness } from "./import-readiness.js";
 import { buildProjectReviewBundle, saveProjectReviewDecision, type ReviewDecision } from "./review.js";
 import { readWorkflowState, writeWorkflowState } from "./workflow-state.js";
 
@@ -484,7 +485,9 @@ export class AtlasWorkflowService {
     const { checkQualityGates } = await import("./quality-gates.js");
     const qualityIssues = await checkQualityGates(project);
     
-    return assessProjectReadiness({ project, artifacts, sources, claims, qualityIssues });
+    const readiness = assessProjectReadiness({ project, artifacts, sources, claims, qualityIssues });
+    readiness.importReadiness = await buildImportReadiness({ project, qualityIssues });
+    return readiness;
   }
 
   async getReview(projectSlug: string) {

@@ -5,6 +5,7 @@ import { appendProjectEvent, listProjectEvents, type ProjectEvent } from "./even
 import { assessProjectReadiness, type ReadinessReport } from "./readiness.js";
 import { approvalArtifactMap, hashImportantArtifacts } from "./artifact-hashes.js";
 import { readWorkflowState, type WorkflowState } from "./workflow-state.js";
+import { buildImportReadiness } from "./import-readiness.js";
 
 export type ReviewDecision = "approved" | "changes_requested" | "blocked";
 export type ApprovalDecision = "approved" | "changes_requested" | "rejected";
@@ -48,6 +49,7 @@ export type ProjectReviewBundle = {
     stage?: string;
     blockingReason?: string;
   };
+  importReadiness: import("../../atlas-publisher/src/types.js").RouteMarketImportReadiness;
 };
 
 export async function buildProjectReviewBundle(input: {
@@ -62,6 +64,12 @@ export async function buildProjectReviewBundle(input: {
   const approvals = await readApprovals(input.project);
   const missingInputs = await readMissingInputs(input.project);
   const qualityIssues = input.qualityIssues ?? [];
+  const importReadiness = await buildImportReadiness({
+    project: input.project,
+    qualityIssues
+  });
+
+  readiness.importReadiness = importReadiness;
 
   let recommendedDecision: ReviewDecision = "approved";
   if (readiness.blockingCount > 0) recommendedDecision = "blocked";
@@ -81,7 +89,8 @@ export async function buildProjectReviewBundle(input: {
     missingInputs,
     artifactHashes: await hashImportantArtifacts(input.project),
     qualityIssues,
-    nextAction: nextAction(readiness, approvals, missingInputs, qualityIssues)
+    nextAction: nextAction(readiness, approvals, missingInputs, qualityIssues),
+    importReadiness
   };
 }
 

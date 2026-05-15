@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAtlasApiServer } from "../apps/api/src/http.js";
 import { JobManager } from "../apps/api/src/jobs.js";
 import { AtlasWorkflowService } from "../packages/atlas-workflow/src/index.js";
-import { AtlasClient, AtlasClientError } from "../packages/atlas-client/src/index.js";
+import { AtlasClient, AtlasClientError, MagicAiAtlasClient, RouteMarketAtlasApiClient } from "../packages/atlas-client/src/index.js";
 
 let tempRoots: string[] = [];
 let servers: Server[] = [];
@@ -96,11 +96,15 @@ describe("Atlas API", () => {
     const readiness = await client.getProjectReadiness(created.id);
     expect(readiness.status).not.toBe("ready");
     expect(readiness.blockingCount).toBeGreaterThanOrEqual(0);
+    expect(typeof readiness.importReadiness.canImportToRouteMarket).toBe("boolean");
+    expect(Array.isArray(readiness.importReadiness.blockingReasons)).toBe(true);
 
     const review = await client.getProjectReview(created.id);
     expect(review.readiness.status).not.toBe("ready");
     expect(review.sourceSummary.total).toBeGreaterThanOrEqual(3);
     expect(review.artifactSummary.requiredMissing).toEqual([]);
+    expect(typeof review.importReadiness.canImportToRouteMarket).toBe("boolean");
+    expect(typeof review.importReadiness.recommendedNextAction).toBe("string");
 
     const approved = await client.submitReviewDecision(created.id, {
       decision: "approved",
@@ -334,6 +338,11 @@ describe("Atlas API", () => {
       status: 401,
       code: "unauthorized"
     } satisfies Partial<AtlasClientError>);
+  });
+
+  it("exports product-named client aliases", () => {
+    expect(MagicAiAtlasClient).toBe(AtlasClient);
+    expect(RouteMarketAtlasApiClient).toBe(AtlasClient);
   });
 });
 

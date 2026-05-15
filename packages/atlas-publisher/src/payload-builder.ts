@@ -1,9 +1,12 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import type { Poi, Recommendation, RouteProject, RouteTip, Claim } from "../../atlas-core/src/index.js";
 import { readJsonFile } from "../../atlas-core/src/index.js";
 import { getRouteMarketCategoryId } from "./category-mapping.js";
 import type { PreparedRouteMarketDraft, RouteMarketDraftPayload } from "./types.js";
+import { hashImportantArtifacts } from "../../atlas-workflow/src/artifact-hashes.js";
+import { buildImportReadiness } from "../../atlas-workflow/src/import-readiness.js";
 
 export async function prepareRouteMarketDraft(project: RouteProject): Promise<PreparedRouteMarketDraft> {
   const guidePath = join(project.folderPath, "guide.md");
@@ -31,6 +34,18 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   const pois = await readPoisFromGeoJson(poisPath);
   const recommendations = await readOptionalJson<Recommendation[]>(recommendationsPath, []);
   const mediaManifest = await readOptionalJson<any>(mediaPath, undefined);
+  const sourceArtifactHashes = await hashImportantArtifacts(project);
+  const generatedAt = new Date().toISOString();
+  const payloadId = createHash("sha256")
+    .update(`${project.slug}:${generatedAt}:${JSON.stringify(sourceArtifactHashes)}`)
+    .digest("hex")
+    .slice(0, 16);
+  const payloadPath = join(project.folderPath, "routemarket_payload.json");
+  const importReadiness = await buildImportReadiness({
+    project,
+    qualityIssues: issues,
+    payloadPath
+  });
 
   const draft: RouteMarketDraftPayload = {
     title: project.title,
@@ -55,9 +70,25 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   };
 
   const prepared: PreparedRouteMarketDraft = {
-    contractVersion: "2.0",
+    contractVersion: "2.1",
     publishMode: "draft",
-    canImportToRouteMarket: true,
+    canImportToRouteMarket: importReadiness.canImportToRouteMarket,
+    payloadId,
+    generatedAt,
+    creationSource: "atlas_ai",
+    atlasProjectSlug: project.slug,
+    draftOnlyMode: true,
+    importReadiness,
+    importPolicy: {
+      firstImportCreatesDraft: true,
+      reimportUpdatesAtlasDraftOnly: true,
+      requireExplicitConfirmationAfterManualEdit: true,
+      importNeverPublishes: true,
+      preserveManualMediaByDefault: true,
+      preserveManualEditsByDefault: true,
+      storeSourceArtifactHashes: true
+    },
+    sourceArtifactHashes,
     project,
     draft,
     routeSummary,
@@ -82,7 +113,7 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
     prepared.gpx = { path: gpxPath, attachMode: "gpx_xml" };
   }
 
-  await writeFile(join(project.folderPath, "routemarket_payload.json"), `${JSON.stringify(prepared, null, 2)}\n`, "utf8");
+  await writeFile(payloadPath, `${JSON.stringify(prepared, null, 2)}\n`, "utf8");
   return prepared;
 }
 
