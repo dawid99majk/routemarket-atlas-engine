@@ -117,6 +117,38 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   return prepared;
 }
 
+export async function publishToRouteMarket(prepared: PreparedRouteMarketDraft): Promise<{ success: boolean; remoteId?: number; message?: string }> {
+  const apiUrl = process.env.ROUTEMARKET_API_URL;
+  const apiToken = process.env.ROUTEMARKET_API_TOKEN;
+
+  if (!apiUrl) {
+    throw new Error("Missing ROUTEMARKET_API_URL environment variable.");
+  }
+  if (!apiToken) {
+    throw new Error("Missing ROUTEMARKET_API_TOKEN environment variable.");
+  }
+
+  console.log(`Publishing payload ${prepared.payloadId} to ${apiUrl}...`);
+
+  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/api/atlas/import`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiToken}`,
+      "X-Atlas-Payload-Id": prepared.payloadId
+    },
+    body: JSON.stringify(prepared)
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`RouteMarket API error (${response.status}): ${errorBody}`);
+  }
+
+  const result = await response.json() as { success: boolean; remoteId?: number; message?: string };
+  return result;
+}
+
 async function readPoisFromGeoJson(path: string): Promise<Poi[]> {
   const geojson = await readOptionalJson<{ features?: Array<Record<string, unknown>> }>(path, { features: [] });
   const pois: Poi[] = [];
