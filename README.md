@@ -69,6 +69,9 @@ npm run atlas -- build-research-pack --project golden-motorcycle-route
 # 4. Analyze GPX
 npm run atlas -- analyze-gpx --project golden-motorcycle-route
 
+# 4b. (Optional) Generate GPX from waypoints
+npm run atlas -- generate-gpx --project golden-motorcycle-route --profile motorcycle
+
 # 5. Extract Facts & POIs
 npm run atlas -- generate-claims --project golden-motorcycle-route
 npm run atlas -- extract-pois --project golden-motorcycle-route

@@ -45,7 +45,7 @@ export async function addInputText(folderPath: string, input: {
   note?: string;
 }): Promise<InputItem> {
   const fileName = sanitizeInputFileName(input.fileName, input.type === "gpx" ? [".gpx"] : [".md", ".txt"]);
-  const maxSize = input.type === "gpx" ? 5_000_000 : 1_000_000;
+  const maxSize = input.type === "gpx" ? 10_000_000 : 1_000_000;
   const sizeBytes = Buffer.byteLength(input.content, "utf8");
   if (sizeBytes > maxSize) throw new Error(`Input is too large. Max size is ${maxSize} bytes.`);
 

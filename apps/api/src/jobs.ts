@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type JobStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed";
@@ -46,73 +46,59 @@ export class JobAlreadyRunningError extends Error {
 export class JobManager {
   private readonly jobs = new Map<string, AtlasJob>();
   private readonly locks = new Map<string, string>();
-  private readonly jobsDir: string;
+  private readonly persistFile?: string;
 
-  constructor(private readonly options: { maxJobs?: number; jobsDir?: string; maxPersistedLogs?: number } = {}) {
-    this.jobsDir = options.jobsDir ?? join(process.cwd(), "data", "jobs");
-    this.initPersistence();
+  constructor(private readonly options: { maxJobs?: number; jobsDir?: string } = {}) {
+    if (options.jobsDir) {
+      this.persistFile = join(options.jobsDir, "jobs_persistence.json");
+      this.initPersistence(options.jobsDir);
+    }
   }
 
-  private initPersistence() {
+  private initPersistence(dir: string) {
     try {
-      mkdirSync(this.jobsDir, { recursive: true });
-      const files = readdirSync(this.jobsDir);
-      for (const file of files) {
-        if (!file.endsWith(".json") || file.endsWith(".log.json")) continue;
-        try {
-          const content = readFileSync(join(this.jobsDir, file), "utf8");
-          const job: AtlasJob = JSON.parse(content);
+      mkdirSync(dir, { recursive: true });
+    } catch {}
+
+    if (!this.persistFile) return;
+
+    try {
+      const fs = require("node:fs");
+      if (fs.existsSync(this.persistFile)) {
+        const content = fs.readFileSync(this.persistFile, "utf8");
+        const persistedJobs: AtlasJob[] = JSON.parse(content);
+        for (const job of persistedJobs) {
           if (job.status === "running" || job.status === "queued") {
             job.status = "failed";
             job.error = "process_restarted";
             job.updatedAt = new Date().toISOString();
-            this.persistJob(job);
           }
-          job.logs = this.readPersistedLogs(job.id);
+          job.logs = []; // logs remain exclusively in RAM
           this.jobs.set(job.id, job);
-          if (job.projectSlug && job.status === "waiting_for_approval") this.locks.set(job.projectSlug, job.id);
-        } catch (e) {
-          console.error(`Failed to load job from ${file}`, e);
+          if (job.projectSlug && job.status === "waiting_for_approval") {
+            this.locks.set(job.projectSlug, job.id);
+          }
         }
+        // Save back immediately to mark active jobs as failed
+        this.persistState();
       }
     } catch (e) {
-      console.error("Failed to initialize job persistence", e);
+      console.error("Failed to load jobs persistence from " + this.persistFile, e);
     }
   }
 
-  private persistJob(job: AtlasJob) {
+  private persistState() {
+    if (!this.persistFile) return;
     try {
-      const { logs, ...jobWithoutLogs } = job;
-      writeFileSync(join(this.jobsDir, `${job.id}.json`), JSON.stringify(jobWithoutLogs, null, 2), "utf8");
+      const activeAndWaiting = Array.from(this.jobs.values())
+        .filter(j => j.status === "queued" || j.status === "running" || j.status === "waiting_for_approval")
+        .map(job => {
+          const { logs, ...jobWithoutLogs } = job;
+          return jobWithoutLogs;
+        });
+      writeFileSync(this.persistFile, JSON.stringify(activeAndWaiting, null, 2), "utf8");
     } catch (e) {
-      console.error(`Failed to persist job ${job.id}`, e);
-    }
-  }
-
-  private persistLog(id: string, log: AtlasJobLog) {
-    try {
-      appendFileSync(join(this.jobsDir, `${id}.log.jsonl`), JSON.stringify(log) + "\\n", "utf8");
-      this.rotateLog(id);
-    } catch (e) {
-      console.error(`Failed to persist log for job ${id}`, e);
-    }
-  }
-
-  private rotateLog(id: string): void {
-    const max = this.options.maxPersistedLogs ?? 500;
-    const path = join(this.jobsDir, `${id}.log.jsonl`);
-    try {
-      const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
-      if (lines.length > max) writeFileSync(path, lines.slice(-max).join("\n") + "\n", "utf8");
-    } catch {}
-  }
-
-  private readPersistedLogs(id: string): AtlasJobLog[] {
-    try {
-      const content = readFileSync(join(this.jobsDir, `${id}.log.jsonl`), "utf8");
-      return content.split("\n").filter((line: string) => line.trim()).map((line: string) => JSON.parse(line));
-    } catch {
-      return [];
+      console.error("Failed to persist jobs state", e);
     }
   }
 
@@ -139,8 +125,7 @@ export class JobManager {
       updatedAt: now
     };
     this.jobs.set(job.id, job);
-    this.persistJob(job);
-    this.persistLog(job.id, job.logs[0]!);
+    this.persistState();
 
     if (projectSlug) {
       this.locks.set(projectSlug, job.id);
@@ -180,14 +165,7 @@ export class JobManager {
   logs(id: string): AtlasJobLog[] {
     const memJob = this.jobs.get(id);
     if (!memJob) return [];
-    if (memJob.logs && memJob.logs.length > 0) return memJob.logs;
-    
-    try {
-      const content = readFileSync(join(this.jobsDir, `${id}.log.jsonl`), "utf8");
-      return content.split("\n").filter((l: string) => l.trim()).map((l: string) => JSON.parse(l));
-    } catch {
-      return [];
-    }
+    return memJob.logs || [];
   }
 
   list(): AtlasJob[] {
@@ -203,14 +181,9 @@ export class JobManager {
       if (statuses.includes(job.status) && (options.olderThanMs === undefined || ageMs > options.olderThanMs)) {
         this.jobs.delete(job.id);
         removed += 1;
-        try {
-          import("node:fs").then(fs => {
-            fs.unlinkSync(join(this.jobsDir, `${job.id}.json`));
-            fs.unlinkSync(join(this.jobsDir, `${job.id}.log.jsonl`));
-          });
-        } catch {}
       }
     }
+    this.persistState();
     return { removed, remaining: this.jobs.size };
   }
 
@@ -282,7 +255,6 @@ export class JobManager {
       updatedAt: entry.at
     };
     this.jobs.set(id, updated);
-    this.persistLog(id, entry);
   }
 
   private patch(id: string, patch: Partial<AtlasJob>): void {
@@ -294,7 +266,7 @@ export class JobManager {
       updatedAt: new Date().toISOString()
     };
     this.jobs.set(id, updated);
-    this.persistJob(updated);
+    this.persistState();
   }
 
   private enforceLimit(): void {
@@ -307,6 +279,7 @@ export class JobManager {
       if (this.jobs.size <= maxJobs) return;
       this.jobs.delete(job.id);
     }
+    this.persistState();
   }
 }
 

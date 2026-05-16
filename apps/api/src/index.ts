@@ -6,9 +6,9 @@ const corsOrigin = process.env.ATLAS_CORS_ORIGIN ?? "*";
 const apiToken = process.env.ATLAS_API_TOKEN || undefined;
 const logRequests = process.env.ATLAS_LOG_REQUESTS === "true";
 const maxJobs = Number(process.env.ATLAS_MAX_JOBS ?? 200);
-const maxPersistedLogs = Number(process.env.ATLAS_MAX_PERSISTED_LOGS ?? 500);
+const jobsDir = process.env.ATLAS_JOBS_DIR;
 
-const server = startAtlasApi({ rootDir, port, corsOrigin, apiToken, logRequests, maxJobs, maxPersistedLogs });
+const server = startAtlasApi({ rootDir, port, corsOrigin, apiToken, logRequests, maxJobs, jobsDir });
 
 if (process.env.NODE_ENV === "production") {
   if (!apiToken) {

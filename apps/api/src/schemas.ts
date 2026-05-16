@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { ProjectStatusSchema } from "../../../packages/atlas-core/src/index.js";
 
+const SafeFileNameSchema = z.string().min(1).max(120).refine(
+  (name) => !name.includes("..") && !name.includes("/") && !name.includes("\\"),
+  { message: "Invalid characters in file name." }
+);
+
 export const DiscoverBodySchema = z.object({
   category: z.string().min(1),
   region: z.string().min(1),
@@ -53,14 +58,14 @@ export const ArchiveProjectBodySchema = z.object({
 });
 
 export const AddNoteBodySchema = z.object({
-  fileName: z.string().min(1).max(120),
+  fileName: SafeFileNameSchema.refine((name) => name.endsWith(".md") || name.endsWith(".txt"), { message: "Only .md and .txt files are allowed." }),
   content: z.string().min(1).max(1_000_000),
   note: z.string().max(500).optional()
 });
 
 export const AddGpxBodySchema = z.object({
-  fileName: z.string().min(1).max(120),
-  content: z.string().min(1).max(5_000_000),
+  fileName: SafeFileNameSchema.refine((name) => name.endsWith(".gpx"), { message: "Only .gpx files are allowed." }),
+  content: z.string().min(1).max(10_000_000),
   note: z.string().max(500).optional()
 });
 
@@ -71,7 +76,7 @@ export const AddLinkBodySchema = z.object({
 
 export const RegisterExternalInputBodySchema = z.object({
   type: z.enum(["note", "document", "photo", "gpx", "link"]),
-  originalName: z.string().min(1).max(160),
+  originalName: SafeFileNameSchema,
   storageUrl: z.string().url().optional(),
   storageKey: z.string().min(1).max(500).optional(),
   mimeType: z.string().min(1).max(120),

@@ -1,5 +1,11 @@
 import { join } from "node:path";
-import { readJsonFile, updateProjectStatus, writeJsonFile, type Claim, type RouteProject, type Source } from "../../atlas-core/src/index.js";
+import { 
+  updateProjectStatus, 
+  type Claim, 
+  type RouteProject, 
+  type Source,
+  type ProjectStorageAdapter
+} from "../../atlas-core/src/index.js";
 import type { ProjectArtifact } from "./artifacts.js";
 import { appendProjectEvent, listProjectEvents, type ProjectEvent } from "./events.js";
 import { assessProjectReadiness, type ReadinessReport } from "./readiness.js";
@@ -54,6 +60,7 @@ export type ProjectReviewBundle = {
 
 export async function buildProjectReviewBundle(input: {
   project: RouteProject;
+  storage: ProjectStorageAdapter;
   artifacts: ProjectArtifact[];
   sources: Source[];
   claims: Claim[];
@@ -61,8 +68,8 @@ export async function buildProjectReviewBundle(input: {
 }): Promise<ProjectReviewBundle> {
   const readiness = assessProjectReadiness(input);
   const events = await listProjectEvents(input.project.folderPath);
-  const approvals = await readApprovals(input.project);
-  const missingInputs = await readMissingInputs(input.project);
+  const approvals = await input.storage.loadApprovals(input.project.id);
+  const missingInputs = await input.storage.loadMissingInputs(input.project.id);
   const qualityIssues = input.qualityIssues ?? [];
   const importReadiness = await buildImportReadiness({
     project: input.project,
@@ -82,7 +89,7 @@ export async function buildProjectReviewBundle(input: {
     claimSummary: summarizeClaims(input.claims),
     artifactSummary: summarizeArtifacts(input.artifacts),
     recommendedDecision,
-    latestDecision: await readLatestReviewDecision(input.project),
+    latestDecision: await readLatestReviewDecision(input.project.id, input.storage),
     recentEvents: events.slice(-10).reverse(),
     approvals,
     workflowState: await readWorkflowState(input.project),
@@ -96,6 +103,7 @@ export async function buildProjectReviewBundle(input: {
 
 export async function saveProjectReviewDecision(input: {
   project: RouteProject;
+  storage: ProjectStorageAdapter;
   decision: ReviewDecision;
   reviewer?: string;
   notes?: string;
@@ -106,10 +114,11 @@ export async function saveProjectReviewDecision(input: {
     notes: input.notes,
     decidedAt: new Date().toISOString()
   };
-  await writeJsonFile(reviewPath(input.project), review);
+  await input.storage.saveReviewDecision(input.project.id, review);
 
   const status = statusForDecision(input.decision);
   const project = await updateProjectStatus(input.project, status);
+  await input.storage.saveProject(input.project.id, project);
   await appendProjectEvent(project.folderPath, {
     type: "review.decision",
     message: `Review decision: ${input.decision}.`,
@@ -126,18 +135,13 @@ export async function saveProjectReviewDecision(input: {
 
 export async function saveProjectApprovalDecision(input: {
   project: RouteProject;
+  storage: ProjectStorageAdapter;
   stage: string;
   decision: ApprovalDecision;
   reviewer?: string;
   notes?: string;
 }): Promise<void> {
-  const path = join(input.project.folderPath, "approvals.json");
-  let approvals;
-  try {
-    approvals = await readJsonFile<any>(path);
-  } catch {
-    approvals = { projectId: input.project.id, updatedAt: "", approvals: [] };
-  }
+  let approvals = await input.storage.loadApprovals(input.project.id);
   
   const artifactHashes = await hashImportantArtifacts(input.project);
   const record: any = {
@@ -159,22 +163,22 @@ export async function saveProjectApprovalDecision(input: {
   }
 
   approvals.updatedAt = record.decidedAt;
-  await writeJsonFile(path, approvals);
+  await input.storage.saveApprovals(input.project.id, approvals);
 
   // Side effects for hardening
   if (input.decision === "approved") {
     if (input.stage === "gpx_summary_approval") {
-      const summaryPath = join(input.project.folderPath, "route_summary.json");
       try {
-        const summary = await readJsonFile<any>(summaryPath);
-        summary.validationStatus = "validated";
-        await writeJsonFile(summaryPath, summary);
+        const summary = await input.storage.loadSummary(input.project.id);
+        if (summary) {
+          summary.validationStatus = "validated";
+          await input.storage.saveSummary(input.project.id, summary);
+        }
       } catch {}
     } else if (input.stage === "poi_approval") {
       let changedPoi = 0;
-      const candidatePath = join(input.project.folderPath, "poi_candidates.json");
       try {
-        const candidateData = await readJsonFile<any>(candidatePath);
+        const candidateData = JSON.parse(await input.storage.readProjectFile(input.project.id, "poi_candidates.json"));
         if (candidateData && Array.isArray(candidateData.pois)) {
           for (const candidate of candidateData.pois) {
             if (typeof candidate.lat === "number" && typeof candidate.lng === "number" && (candidate.lat !== 0 || candidate.lng !== 0)) {
@@ -182,13 +186,12 @@ export async function saveProjectApprovalDecision(input: {
               changedPoi += 1;
             }
           }
-          await writeJsonFile(candidatePath, candidateData);
+          await input.storage.writeProjectFile(input.project.id, "poi_candidates.json", JSON.stringify(candidateData, null, 2));
         }
       } catch {}
 
-      const poiPath = join(input.project.folderPath, "poi.geojson");
       try {
-        const geojson = await readJsonFile<any>(poiPath);
+        const geojson = JSON.parse(await input.storage.readProjectFile(input.project.id, "poi.geojson"));
         if (geojson && Array.isArray(geojson.features)) {
           for (const feature of geojson.features) {
             if (feature.geometry?.coordinates?.length === 2) {
@@ -197,27 +200,23 @@ export async function saveProjectApprovalDecision(input: {
               changedPoi += 1;
             }
           }
-          await writeJsonFile(poiPath, geojson);
+          await input.storage.writeProjectFile(input.project.id, "poi.geojson", JSON.stringify(geojson, null, 2));
         }
       } catch {}
       record.audit.changedPoi = changedPoi;
     } else if (input.stage === "claims_approval") {
-      const claimsPath = join(input.project.folderPath, "claims.json");
-      const packPath = join(input.project.folderPath, "research_pack.json");
       try {
-        const claims = await readJsonFile<any[]>(claimsPath);
+        const claims = await input.storage.loadClaims(input.project.id);
+        const pack = JSON.parse(await input.storage.readProjectFile(input.project.id, "research_pack.json"));
         
         let creatorSourceIds = new Set<string>();
-        try {
-          const pack = await readJsonFile<any>(packPath);
-          if (pack && Array.isArray(pack.materials)) {
-            for (const mat of pack.materials) {
-              if (mat.trustLevel === "creator") {
-                creatorSourceIds.add(mat.id);
-              }
+        if (pack && Array.isArray(pack.materials)) {
+          for (const mat of pack.materials) {
+            if (mat.trustLevel === "creator") {
+              creatorSourceIds.add(mat.id);
             }
           }
-        } catch {}
+        }
 
         let verifiedClaims = 0;
         let likelyClaims = 0;
@@ -237,7 +236,7 @@ export async function saveProjectApprovalDecision(input: {
             unchangedClaims += 1;
           }
         }
-        await writeJsonFile(claimsPath, claims);
+        await input.storage.saveClaims(input.project.id, claims);
         record.audit.changedClaims = verifiedClaims + likelyClaims;
         record.audit.verifiedClaims = verifiedClaims;
         record.audit.likelyClaims = likelyClaims;
@@ -248,13 +247,17 @@ export async function saveProjectApprovalDecision(input: {
 
   record.artifactHashes = filterHashesForStage(input.stage, await hashImportantArtifacts(input.project));
   approvals.updatedAt = new Date().toISOString();
-  await writeJsonFile(path, approvals);
+  await input.storage.saveApprovals(input.project.id, approvals);
 
   await appendProjectEvent(input.project.folderPath, {
     type: "review.approval",
     message: `Approval for ${input.stage}: ${input.decision}.`,
     data: record
   });
+}
+
+export async function readLatestReviewDecision(slug: string, storage: ProjectStorageAdapter): Promise<ProjectReviewDecision | undefined> {
+  return storage.loadReviewDecision(slug);
 }
 
 function hasCreatorSource(claim: any): boolean {
@@ -266,22 +269,6 @@ function filterHashesForStage(stage: string, hashes: Record<string, string>): Re
   return Object.fromEntries(files.map((file) => [file, hashes[file] ?? "missing"]));
 }
 
-async function readApprovals(project: RouteProject): Promise<any> {
-  try {
-    return await readJsonFile<any>(join(project.folderPath, "approvals.json"));
-  } catch {
-    return { projectId: project.id, approvals: [] };
-  }
-}
-
-async function readMissingInputs(project: RouteProject): Promise<any> {
-  try {
-    return await readJsonFile<any>(join(project.folderPath, "missing_inputs.json"));
-  } catch {
-    return { missing: [] };
-  }
-}
-
 function nextAction(readiness: ReadinessReport, approvals: any, missingInputs: any, qualityIssues: import("./quality-gates.js").QualityIssue[]): ProjectReviewBundle["nextAction"] {
   if (missingInputs?.blocking) return { type: "fix_blocking_inputs", label: "Fix missing inputs", blockingReason: missingInputs.missing?.[0]?.message };
   const stages = ["gpx_summary_approval", "claims_approval", "poi_approval", "concept_approval", "guide_outline_approval", "guide_final_approval"];
@@ -290,14 +277,6 @@ function nextAction(readiness: ReadinessReport, approvals: any, missingInputs: a
   if (qualityIssues.length > 0 || readiness.blockingCount > 0) return { type: "fix_blocking_inputs", label: "Resolve quality gates", blockingReason: qualityIssues[0]?.message };
   if (readiness.status !== "ready") return { type: "review", label: "Review project warnings" };
   return { type: "prepare_publish", label: "Prepare RouteMarket draft" };
-}
-
-export async function readLatestReviewDecision(project: RouteProject): Promise<ProjectReviewDecision | undefined> {
-  try {
-    return await readJsonFile<ProjectReviewDecision>(reviewPath(project));
-  } catch {
-    return undefined;
-  }
 }
 
 function summarizeSources(sources: Source[]): ProjectReviewBundle["sourceSummary"] {
@@ -344,5 +323,6 @@ function statusForDecision(decision: ReviewDecision): ProjectStatus {
 }
 
 function reviewPath(project: RouteProject): string {
+  // Deprecated, use storage
   return join(project.folderPath, "review_decision.json");
 }

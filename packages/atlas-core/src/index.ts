@@ -21,3 +21,5 @@ export * from "./projects/list-projects.js";
 export * from "./scoring/topic-scoring.js";
 export * from "./storage/json.js";
 export * from "./storage/paths.js";
+export * from "./storage/adapter.js";
+export * from "./storage/file-adapter.js";

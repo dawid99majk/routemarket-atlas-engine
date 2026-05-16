@@ -13,9 +13,11 @@ import {
   ClaimSchema,
   routesPath,
   updateProjectStatus,
+  FileProjectStorage,
   type RouteProject,
   type Source,
-  type Claim
+  type Claim,
+  type ProjectStorageAdapter
 } from "../../atlas-core/src/index.js";
 import { z } from "zod";
 import { prepareRouteMarketDraft } from "../../atlas-publisher/src/index.js";
@@ -44,6 +46,7 @@ import { readWorkflowState, writeWorkflowState } from "./workflow-state.js";
 
 export type AtlasWorkflowOptions = {
   rootDir: string;
+  storage?: ProjectStorageAdapter;
 };
 
 export type CreateProjectRequest = {
@@ -90,7 +93,11 @@ export type WorkflowProgress = {
 export type WorkflowProgressCallback = (progress: WorkflowProgress) => void;
 
 export class AtlasWorkflowService {
-  constructor(private readonly options: AtlasWorkflowOptions) {}
+  private readonly storage: ProjectStorageAdapter;
+
+  constructor(private readonly options: AtlasWorkflowOptions) {
+    this.storage = options.storage ?? new FileProjectStorage(options.rootDir);
+  }
 
   discover(input: DiscoverRequest) {
     return discoverDemand({
@@ -119,7 +126,7 @@ export class AtlasWorkflowService {
   }
 
   async listProjects(filters: ProjectListFilters = {}) {
-    const projects = await listRouteProjects(this.options.rootDir);
+    const projects = await this.storage.listProjects();
     return filterProjects(projects, filters);
   }
 
@@ -136,11 +143,11 @@ export class AtlasWorkflowService {
   }
 
   getProject(projectSlug: string) {
-    return this.loadProject(projectSlug);
+    return this.storage.getProject(projectSlug);
   }
 
   async collectSources(projectSlug: string, input: CollectSourcesRequest = {}) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const sources = await collectSources({ project, provider: input.provider, limit: input.limit });
     await appendProjectEvent(project.folderPath, {
       type: "sources.collected",
@@ -151,7 +158,7 @@ export class AtlasWorkflowService {
   }
 
   async runDeepResearch(projectSlug: string, input: RunDeepResearchRequest = {}) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const report = await runDeepResearch({ project, sourceLimit: input.sourceLimit });
     await appendProjectEvent(project.folderPath, {
       type: "research.deep_completed",
@@ -177,7 +184,7 @@ export class AtlasWorkflowService {
   }
 
   async addNoteText(projectSlug: string, input: AddTextInputRequest) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const item = await addInputText(project.folderPath, { ...input, type: "note" });
     await appendProjectEvent(project.folderPath, {
       type: "input.note_added",
@@ -188,7 +195,7 @@ export class AtlasWorkflowService {
   }
 
   async addGpxText(projectSlug: string, input: AddTextInputRequest) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const item = await addInputText(project.folderPath, { ...input, type: "gpx" });
     await appendProjectEvent(project.folderPath, {
       type: "input.gpx_added",
@@ -199,7 +206,7 @@ export class AtlasWorkflowService {
   }
 
   async addLink(projectSlug: string, input: { url: string; note?: string }) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const item = await addInputLink(project.folderPath, input.url, input.note);
     await appendProjectEvent(project.folderPath, {
       type: "input.link_added",
@@ -218,7 +225,7 @@ export class AtlasWorkflowService {
     sizeBytes: number;
     note?: string;
   }) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const item = await registerExternalInput(project.folderPath, input);
     await appendProjectEvent(project.folderPath, {
       type: "input.external_registered",
@@ -229,7 +236,7 @@ export class AtlasWorkflowService {
   }
 
   async buildResearchPack(projectSlug: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const { buildResearchPack } = await import("../../atlas-research/src/index.js");
     const researchPack = await buildResearchPack(project);
     await appendProjectEvent(project.folderPath, {
@@ -241,7 +248,7 @@ export class AtlasWorkflowService {
   }
 
   async analyzeGpx(projectSlug: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const { analyzeGpx } = await import("../../atlas-research/src/index.js");
     const routeSummary = await analyzeGpx(project);
     await appendProjectEvent(project.folderPath, {
@@ -271,7 +278,7 @@ export class AtlasWorkflowService {
     const isApproved = async (stage: string) => {
       if (options.autoApprove && process.env.NODE_ENV !== "production") return true;
       try {
-        const approvals = await readJsonFile<any>(join(project.folderPath, "approvals.json"));
+        const approvals = await this.storage.loadApprovals(projectSlug);
         return approvals.approvals.some((a: any) => a.stage === stage && a.decision === "approved");
       } catch {
         return false;
@@ -448,7 +455,7 @@ export class AtlasWorkflowService {
 
 
   async preparePublish(projectSlug: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const { checkQualityGates, QualityGateError } = await import("./quality-gates.js");
     const issues = await checkQualityGates(project);
     if (issues.length > 0) {
@@ -458,7 +465,7 @@ export class AtlasWorkflowService {
   }
 
   async listArtifacts(projectSlug: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     return {
       project,
       artifacts: await listProjectArtifacts(project.folderPath)
@@ -466,7 +473,7 @@ export class AtlasWorkflowService {
   }
 
   async getProjectBundle(projectSlug: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const [artifacts, events] = await Promise.all([
       listProjectArtifacts(project.folderPath),
       listProjectEvents(project.folderPath)
@@ -475,11 +482,11 @@ export class AtlasWorkflowService {
   }
 
   async assessReadiness(projectSlug: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const [artifacts, sources, claims] = await Promise.all([
       listProjectArtifacts(project.folderPath),
-      this.loadSources(project),
-      this.loadClaims(project)
+      this.loadSources(projectSlug),
+      this.loadClaims(projectSlug)
     ]);
     
     const { checkQualityGates } = await import("./quality-gates.js");
@@ -491,21 +498,22 @@ export class AtlasWorkflowService {
   }
 
   async getReview(projectSlug: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const [artifacts, sources, claims] = await Promise.all([
       listProjectArtifacts(project.folderPath),
-      this.loadSources(project),
-      this.loadClaims(project)
+      this.loadSources(projectSlug),
+      this.loadClaims(projectSlug)
     ]);
     const { checkQualityGates } = await import("./quality-gates.js");
     const qualityIssues = await checkQualityGates(project);
-    return buildProjectReviewBundle({ project, artifacts, sources, claims, qualityIssues });
+    return buildProjectReviewBundle({ project, storage: this.storage, artifacts, sources, claims, qualityIssues });
   }
 
   async submitReviewDecision(projectSlug: string, input: SubmitReviewDecisionRequest) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     return saveProjectReviewDecision({
       project,
+      storage: this.storage,
       decision: input.decision,
       reviewer: input.reviewer,
       notes: input.notes
@@ -513,10 +521,11 @@ export class AtlasWorkflowService {
   }
 
   async approveStage(projectSlug: string, stage: string, decision: import("./review.js").ApprovalDecision, notes?: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     const { saveProjectApprovalDecision } = await import("./review.js");
     const result = await saveProjectApprovalDecision({
       project,
+      storage: this.storage,
       stage,
       decision,
       notes
@@ -541,7 +550,7 @@ export class AtlasWorkflowService {
   }
 
   async listEvents(projectSlug: string) {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.storage.getProject(projectSlug);
     return {
       project,
       events: await listProjectEvents(project.folderPath)
@@ -552,15 +561,15 @@ export class AtlasWorkflowService {
     if (!allowedProjectFiles.has(file) || file.includes("..") || file.startsWith("/") || file.startsWith("\\")) {
       throw new Error("Invalid file path.");
     }
-    return readFile(join(routesPath(this.options.rootDir, projectSlug), file), "utf8");
+    return this.storage.readProjectFile(projectSlug, file);
   }
 
   async writeProjectFile(projectSlug: string, file: string, content: string): Promise<{ path: string; content: string }> {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.getProject(projectSlug);
     if (!writableProjectFiles.has(file) || file.includes("..") || file.startsWith("/") || file.startsWith("\\")) {
       throw new Error("File is not writable through Atlas API.");
     }
-    await writeFile(join(routesPath(this.options.rootDir, projectSlug), file), content, "utf8");
+    await this.storage.writeProjectFile(projectSlug, file, content);
     await appendProjectEvent(project.folderPath, {
       type: "project.file_updated",
       message: `Updated ${file}.`,
@@ -570,8 +579,9 @@ export class AtlasWorkflowService {
   }
 
   async setProjectStatus(projectSlug: string, status: import("../../atlas-core/src/index.js").ProjectStatus): Promise<RouteProject> {
-    const project = await this.loadProject(projectSlug);
+    const project = await this.getProject(projectSlug);
     const updated = await updateProjectStatus(project, status);
+    await this.storage.saveProject(projectSlug, updated);
     await appendProjectEvent(project.folderPath, {
       type: "project.status_changed",
       message: `Project status changed to ${status}.`,
@@ -581,21 +591,17 @@ export class AtlasWorkflowService {
   }
 
   private async loadProjectBundle(projectSlug: string): Promise<{ project: RouteProject; sources: Source[] }> {
-    const project = await this.loadProject(projectSlug);
-    const sources = await this.loadSources(project);
+    const project = await this.getProject(projectSlug);
+    const sources = await this.loadSources(projectSlug);
     return { project, sources };
   }
 
-  private loadProject(projectSlug: string): Promise<RouteProject> {
-    return readJsonFileWithSchema<RouteProject>(join(routesPath(this.options.rootDir, projectSlug), "project.json"), RouteProjectSchema);
+  private loadSources(projectSlug: string): Promise<Source[]> {
+    return this.storage.loadSources(projectSlug);
   }
 
-  private loadSources(project: RouteProject): Promise<Source[]> {
-    return readJsonFileWithSchema<Source[]>(join(project.folderPath, "sources.json"), z.array(SourceSchema));
-  }
-
-  private loadClaims(project: RouteProject): Promise<Claim[]> {
-    return readJsonFileWithSchema<Claim[]>(join(project.folderPath, "claims.json"), z.array(ClaimSchema));
+  private loadClaims(projectSlug: string): Promise<Claim[]> {
+    return this.storage.loadClaims(projectSlug);
   }
 }
 

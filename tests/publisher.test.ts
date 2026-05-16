@@ -2,7 +2,7 @@ import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRouteProject } from "../packages/atlas-core/src/index.js";
+import { createRouteProject, FileProjectStorage } from "../packages/atlas-core/src/index.js";
 import { buildResearchPack, generateClaims, analyzeGpx } from "../packages/atlas-research/src/index.js";
 import { getRouteMarketCategoryId, prepareRouteMarketDraft } from "../packages/atlas-publisher/src/index.js";
 import { generateGuideV2, generateQualityReport, generateRecommendations, generateRouteConcept, generateRouteTips, prepareMediaPack, writeGuideOutline, writeReviewChecklist } from "../packages/atlas-writer/src/index.js";
@@ -55,11 +55,12 @@ describe("RouteMarket publisher payload", () => {
     await generateClaims(project);
     await generateRouteConcept({ project, sources: [] });
     await writeGuideOutline(project);
+    const storage = new FileProjectStorage(rootDir);
     for (const stage of ["gpx_summary_approval", "claims_approval", "poi_approval", "concept_approval", "guide_outline_approval"] as const) {
-      await saveProjectApprovalDecision({ project, stage, decision: "approved" });
+      await saveProjectApprovalDecision({ project, storage, stage, decision: "approved" });
     }
     await generateGuideV2(project);
-    await saveProjectApprovalDecision({ project, stage: "guide_final_approval", decision: "approved" });
+    await saveProjectApprovalDecision({ project, storage, stage: "guide_final_approval", decision: "approved" });
     await generateRouteTips(project);
     await generateRecommendations(project);
     await prepareMediaPack(project);

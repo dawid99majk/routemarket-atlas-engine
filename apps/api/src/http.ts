@@ -28,7 +28,7 @@ export type AtlasApiOptions = {
   apiToken?: string;
   logRequests?: boolean;
   maxJobs?: number;
-  maxPersistedLogs?: number;
+  jobsDir?: string;
 };
 
 type RouteParams = Record<string, string>;
@@ -53,9 +53,15 @@ type Route = {
   public?: boolean;
 };
 
+function validateSlug(slug: string) {
+  if (slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
+    throw badRequest("Invalid slug provided.");
+  }
+}
+
 export function createAtlasApiServer(options: AtlasApiOptions): Server {
   const service = new AtlasWorkflowService({ rootDir: options.rootDir });
-  const jobs = new JobManager({ maxJobs: options.maxJobs, maxPersistedLogs: options.maxPersistedLogs });
+  const jobs = new JobManager({ maxJobs: options.maxJobs, jobsDir: options.jobsDir });
   const corsOrigin = options.corsOrigin ?? "*";
   const apiToken = options.apiToken;
   const logRequests = options.logRequests ?? false;
@@ -80,6 +86,8 @@ export function createAtlasApiServer(options: AtlasApiOptions): Server {
 
     try {
       if (apiToken && !matchedRoute.public) assertAuthorized(req, apiToken);
+      if (matchedRoute.params.slug) validateSlug(matchedRoute.params.slug);
+      
       const result = await matchedRoute.handler({
         req,
         res,
@@ -145,11 +153,11 @@ function createRoutes(): Route[] {
       return { sources: await service.collectSources(params.slug, body) };
     }),
     route("POST", "/projects/:slug/inputs/notes", async ({ req, params, service }) => {
-      const body = AddNoteBodySchema.parse(await readJson(req));
+      const body = AddNoteBodySchema.parse(await readJson(req, 1_000_000));
       return service.addNoteText(params.slug, body);
     }),
     route("POST", "/projects/:slug/inputs/gpx", async ({ req, params, service }) => {
-      const body = AddGpxBodySchema.parse(await readJson(req));
+      const body = AddGpxBodySchema.parse(await readJson(req, 10_000_000));
       return service.addGpxText(params.slug, body);
     }),
     route("POST", "/projects/:slug/inputs/links", async ({ req, params, service }) => {
@@ -193,10 +201,8 @@ function createRoutes(): Route[] {
       // Resume logic
       const projectSlug = job.type.split(":")[1];
       if (!projectSlug) throw badRequest("Invalid job type for approval.");
+      validateSlug(projectSlug);
 
-      // Next step logic: we need to know what the next step is.
-      // For simplicity, we assume we resume runMvp2. 
-      // In a real system, we'd store the next step in the job context.
       const nextStepMap: Record<string, string> = {
         "gpx_summary_approval": "claims",
         "claims_approval": "pois",
@@ -274,9 +280,16 @@ function matchRoute(routes: Route[], method: string, pathname: string): (Route &
   return undefined;
 }
 
-async function readJson(req: IncomingMessage): Promise<any> {
+async function readJson(req: IncomingMessage, maxBytes: number = 1_000_000): Promise<any> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  let received = 0;
+  for await (const chunk of req) {
+    received += chunk.length;
+    if (received > maxBytes) {
+      throw badRequest(`Request body too large. Limit is ${maxBytes} bytes.`);
+    }
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   try {
     return raw.trim() ? JSON.parse(raw) : {};
@@ -301,7 +314,8 @@ function setCorsHeaders(res: ServerResponse, corsOrigin: string, reqOrigin?: str
 
 function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(`${JSON.stringify(body, null, 2)}\n`);
+  res.end(`${JSON.stringify(body, null, 2)}
+`);
 }
 
 import { ZodError } from "zod";
