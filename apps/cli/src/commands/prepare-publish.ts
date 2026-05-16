@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { prepareRouteMarketDraft, publishToRouteMarket } from "../../../../packages/atlas-publisher/src/index.js";
+import { prepareRouteMarketDraft, publishLiveDraft } from "../../../../packages/atlas-publisher/src/index.js";
 import { loadProject } from "./load-project.js";
 import { AtlasWorkflowService } from "../../../../packages/atlas-workflow/src/index.js";
 
@@ -24,7 +24,7 @@ export function registerPreparePublishCommand(program: Command): void {
           console.log(JSON.stringify(prepared.draft, null, 2));
         } else if (options.mode === "create-draft") {
           console.log("\n[PUBLISH] Sending payload to RouteMarket API...");
-          const result = await publishToRouteMarket(prepared);
+          const result = await publishLiveDraft(prepared);
           
           if (result.success) {
             console.log(`\n[SUCCESS] Route published as draft!`);

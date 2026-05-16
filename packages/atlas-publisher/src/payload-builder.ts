@@ -117,7 +117,7 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   return prepared;
 }
 
-export async function publishToRouteMarket(prepared: PreparedRouteMarketDraft): Promise<{ success: boolean; remoteId?: number; message?: string }> {
+export async function publishLiveDraft(prepared: PreparedRouteMarketDraft): Promise<{ success: boolean; remoteId?: number; message?: string }> {
   const apiUrl = process.env.ROUTEMARKET_API_URL;
   const apiToken = process.env.ROUTEMARKET_API_TOKEN;
 
