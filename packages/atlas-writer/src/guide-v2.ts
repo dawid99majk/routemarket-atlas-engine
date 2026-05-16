@@ -38,17 +38,15 @@ Current source count: ${input.sources?.length ?? 0}
   return guide;
 }
 
-export async function generateGuideV2(project: RouteProject): Promise<string | undefined> {
+export async function validateGuideInputs(project: RouteProject): Promise<MissingInputs | undefined> {
   const summary = await readRouteSummary(project);
   const pack = await readResearchPack(project);
   const claims = await readClaims(project);
-  const pois = await readPois(project);
   const concept = await readConcept(project);
   const approvals = await readApprovals(project);
-
-  // Validate inputs
-  const missing: MissingInputItem[] = [];
   
+  const missing: MissingInputItem[] = [];
+
   if (!summary) {
     missing.push({ code: "missing_route_summary", message: "route_summary.json is missing.", requiredFor: "guide_final" });
   } else {
@@ -59,9 +57,9 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
       missing.push({ code: "needs_gpx_validation", message: "GPX summary needs human approval.", requiredFor: "guide_final" });
     }
   }
-  
-  if (!pack || pack.materials.filter((m: any) => m.status === "active" || m.status === "usable").length === 0) {
-    missing.push({ code: "missing_research", message: "Research pack is missing or empty.", requiredFor: "guide_final" });
+
+  if (!pack || !pack.materials || pack.materials.length === 0) {
+    missing.push({ code: "missing_research", message: "Research pack requires at least 1 material.", requiredFor: "guide_final" });
   }
 
   const verifiedClaims = claims.filter(c => c.status === "verified" || c.status === "likely");
@@ -80,12 +78,20 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
   missing.push(...missingMandatorySectionFacts(project.category, verifiedClaims));
 
   if (missing.length > 0) {
-    const missingInputs: MissingInputs = {
+    return {
       projectId: project.id,
       generatedAt: new Date().toISOString(),
       blocking: true,
       missing
     };
+  }
+  return undefined;
+}
+
+export async function generateGuideV2(project: RouteProject): Promise<string | undefined> {
+  const missingInputs = await validateGuideInputs(project);
+
+  if (missingInputs) {
     await writeFile(join(project.folderPath, "missing_inputs.json"), JSON.stringify(missingInputs, null, 2), "utf8");
     console.warn(`Guide generation blocked by missing inputs for project ${project.id}`);
     return undefined;
@@ -97,9 +103,16 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
     await unlink(join(project.folderPath, "missing_inputs.json"));
   } catch {}
 
-  const warnings = summary!.warnings ?? [];
-  const segments = summary!.routeSegments ?? [];
-  const trustedMaterials = pack!.materials.filter((m: any) => m.status === "active" || m.status === "usable");
+  const summary = (await readRouteSummary(project))!;
+  const pack = (await readResearchPack(project))!;
+  const claims = await readClaims(project);
+  const pois = await readPois(project);
+  const concept = await readConcept(project);
+
+  const warnings = summary.warnings ?? [];
+  const segments = summary.routeSegments ?? [];
+  const trustedMaterials = pack.materials.filter((m: any) => m.status === "active" || m.status === "usable");
+  
   const sectionClaims = {
     logistics: claimsForTypes(claims, ["logistics", "distance", "access"]),
     safety: claimsForTypes(claims, ["safety", "legal"]),
@@ -110,85 +123,54 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
   markUsed(sectionClaims.safety, "safety");
   markUsed(sectionClaims.season, "season_notes");
   markUsed(sectionClaims.practical, "preparation");
+  
   await writeFile(join(project.folderPath, "claims.json"), JSON.stringify(claims, null, 2), "utf8");
-  const guide = `# ${project.title}
 
-## Quick facts
-- Distance: ${summary!.distanceKm} km
-- Elevation gain: ${summary!.elevationGainM ?? "not provided in GPX"} m
-- Estimated time: ${summary!.estimatedTimeH} h
-- Difficulty: ${summary!.difficulty ?? "requires editor classification"}
-- Loop type: ${summary!.loopType ?? "not classified"}
-- Start: ${summary!.startPoint}
-- Finish: ${summary!.endPoint}
+  const quickFacts = [
+    `Distance: ${summary.distanceKm} km`,
+    summary.elevationGainM !== undefined ? `Elevation gain: ${summary.elevationGainM} m` : null,
+    summary.estimatedTimeH !== undefined ? `Estimated time: ${summary.estimatedTimeH} h` : null,
+    summary.difficulty ? `Difficulty: ${summary.difficulty}` : null,
+    summary.loopType ? `Loop type: ${summary.loopType}` : null,
+    summary.startPoint ? `Start: ${summary.startPoint}` : null,
+    summary.endPoint ? `Finish: ${summary.endPoint}` : null
+  ].filter(Boolean).map(f => `- ${f}`).join("\n");
 
-## Target audience
+  const segmentsText = segments.length ? segments.map(segment => {
+    const sFacts = [
+      `Distance: ${segment.distanceKm} km`,
+      segment.elevationGainM !== undefined ? `Elevation gain: ${segment.elevationGainM} m` : null,
+      segment.estimatedTimeH !== undefined ? `Estimated time: ${segment.estimatedTimeH} h` : null
+    ].filter(Boolean).map(f => `- ${f}`).join("\n");
+    return `### Segment ${segment.index}: ${segment.from} to ${segment.to}\n\n${sFacts}`;
+  }).join("\n\n") : "";
 
-${targetAudience(project.category)}
+  const poisText = pois.length ? pois.map(p => `### ${p.name}\n\n${p.description || ""}`).join("\n\n") : "";
+  const warningsText = warnings.length ? warnings.map((warning: any) => `- ${warning.message}`).join("\n") : "";
+  const routeValue = extractConceptSection(concept!, "Route promise");
+  const audience = targetAudience(project.category);
 
-## Route value
+  const guideBlocks = [
+    `# ${project.title}`,
+    `## Quick facts\n${quickFacts}`,
+    audience ? `## Target audience\n\n${audience}` : null,
+    routeValue ? `## Route value\n\n${routeValue}` : null,
+    `## Route overview\n\nThis guide is based on validated GPX facts, creator materials and reviewed route claims. The route covers ${summary.distanceKm} km in ${project.region}, with ${summary.isLoop ? "a loop format" : "a point-to-point format"}.`,
+    segmentsText ? `## Segment description\n\n${segmentsText}` : null,
+    poisText ? `## Points of interest\n\n${poisText}` : null,
+    sectionClaims.logistics.length ? `## Logistics\n\n${renderClaims(sectionClaims.logistics)}` : null,
+    sectionClaims.safety.length ? `## Safety\n\n${renderClaims(sectionClaims.safety)}` : null,
+    sectionClaims.season.length ? `## Season notes\n\n${renderClaims(sectionClaims.season)}` : null,
+    `## Preparation\n\n- Download the GPX before departure.\n- Check weather, road or trail closures, and local access rules before starting.\n- Carry backup navigation and enough water, food, fuel or battery for the route category.`,
+    `## Variants\n\n- Shorten the route at a verified settlement, trailhead or road junction before committing to remote sections.\n- Extend only after validating extra GPX distance, surface and daylight.`,
+    trustedMaterials.length ? `## Sources\n\n${trustedMaterials.map((material: any) => `- ${material.title}${material.sourceUrl ? ` (${material.sourceUrl})` : ""}`).join("\n")}` : null,
+    claims.some(c => c.usedInSections?.length) ? `## Sources and verification\n\n${claims.filter(c => c.usedInSections?.length).map(c => `- ${c.claim} [${c.sources.join(", ")}] used in ${c.usedInSections!.join(", ")}`).join("\n")}` : null,
+    `## Review summary\n\n${reviewSummary(sectionClaims)}`,
+    warningsText ? `## Warnings and validation notes\n\n${warningsText}` : null,
+    `## Disclaimer\n\nThis guide is an editorial navigation aid, not a guarantee of access, safety, weather, legality or current field conditions. Verify critical facts before publishing and before travel.`
+  ].filter(Boolean).join("\n\n");
 
-${extractConceptSection(concept!, "Route promise")}
-
-## Route overview
-
-This guide is based on validated GPX facts, creator materials and reviewed route claims. The route covers ${summary!.distanceKm} km in ${project.region}, with ${summary!.isLoop ? "a loop format" : "a point-to-point format"}.
-
-## Segment description
-
-${segments.length ? segments.map(segment => `### Segment ${segment.index}: ${segment.from} to ${segment.to}
-
-- Distance: ${segment.distanceKm} km
-- Elevation gain: ${segment.elevationGainM ?? 0} m
-- Estimated time: ${segment.estimatedTimeH ?? "category estimate included in total"} h`).join("\n\n") : "- Segment data is not available."}
-
-## Points of interest
-
-${pois.length ? pois.map(p => `### ${p.name}\n\n${p.description ?? "Approved point of interest on the route."}`).join("\n\n") : "- No approved POI have been attached yet."}
-
-## Logistics
-
-${renderClaims(sectionClaims.logistics)}
-
-## Safety
-
-${renderClaims(sectionClaims.safety)}
-
-## Season notes
-
-${renderClaims(sectionClaims.season)}
-
-## Preparation
-
-- Download the GPX before departure.
-- Check weather, road or trail closures, and local access rules before starting.
-- Carry backup navigation and enough water, food, fuel or battery for the route category.
-
-## Variants
-
-- Shorten the route at a verified settlement, trailhead or road junction before committing to remote sections.
-- Extend only after validating extra GPX distance, surface and daylight.
-
-## Sources
-
-${trustedMaterials.map((material: any) => `- ${material.title}${material.sourceUrl ? ` (${material.sourceUrl})` : ""}`).join("\n")}
-
-## Sources and verification
-
-${claims.filter(c => c.usedInSections?.length).map(c => `- ${c.claim} [${c.sources.join(", ")}] used in ${c.usedInSections!.join(", ")}`).join("\n")}
-
-## Review summary
-
-${reviewSummary(sectionClaims)}
-
-## Warnings and validation notes
-
-${warnings.length ? warnings.map((warning: any) => `- ${warning.message}`).join("\n") : "- No GPX warnings were produced during analysis."}
-
-## Disclaimer
-
-This guide is an editorial navigation aid, not a guarantee of access, safety, weather, legality or current field conditions. Verify critical facts before publishing and before travel.
-`;
+  const guide = guideBlocks + "\n";
 
   await writeFile(join(project.folderPath, "guide.md"), guide, "utf8");
   return guide;
@@ -223,19 +205,19 @@ function targetAudience(category: string): string {
     city_walk: "Self-guided walkers who want a coherent route with worthwhile stops and simple navigation.",
     roadtrip: "Drivers who want scenic flow, practical stops and realistic time planning."
   };
-  return audiences[category] ?? "Travelers who need a practical, verified route guide.";
+  return audiences[category] ?? "";
 }
 
 function extractConceptSection(concept: string, heading: string): string {
   const lines = concept.split(/\r?\n/);
   const index = lines.findIndex((line) => line.trim().toLowerCase() === `## ${heading}`.toLowerCase());
-  if (index === -1) return "The route value is described in the approved route concept.";
+  if (index === -1) return "";
   const collected: string[] = [];
   for (const line of lines.slice(index + 1)) {
     if (line.startsWith("## ")) break;
     if (line.trim()) collected.push(line.trim());
   }
-  return collected.join(" ") || "The route value is described in the approved route concept.";
+  return collected.join(" ");
 }
 
 function claimsForTypes(claims: Claim[], types: Claim["claimType"][]): Claim[] {
@@ -254,6 +236,7 @@ function markUsed(claims: Claim[], section: string): void {
 
 function reviewSummary(sectionClaims: Record<string, Claim[]>): string {
   return Object.entries(sectionClaims)
+    .filter(([_, claims]) => claims.length > 0)
     .map(([section, claims]) => `- ${section}: ${claims.length} supporting claim(s)`)
     .join("\n");
 }

@@ -15,7 +15,7 @@ type GpxPoint = {
   time?: string;
 };
 
-type RouteWarning = { code: string; message: string };
+type RouteWarning = { code: string; message: string; severity: "low" | "medium" | "high" };
 type RouteSegment = {
   index: number;
   from: string;
@@ -79,17 +79,19 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
   const summary: RouteSummary = {
     distanceKm: Math.round(stats.distanceKm * 10) / 10,
     elevationGainM: stats.hasElevation ? Math.round(stats.elevationGainM) : undefined,
-    estimatedTimeH: estimateTime(project.category, stats.distanceKm, stats.elapsedHours),
+    estimatedTimeH: estimateTime(project.category, stats.distanceKm, stats.elevationGainM, stats.elapsedHours),
     difficulty: inferDifficulty(stats),
     riskLevel: "unknown",
     loopType: stats.isLoop ? "loop" : "point_to_point",
     startPoint: formatPoint(points[0]),
     endPoint: stats.isLoop ? "Back to start" : formatPoint(points[points.length - 1]),
+    season: undefined,
+    surfaceType: undefined,
     hasElevation: stats.hasElevation,
     hasTime: stats.hasTime,
     isLoop: stats.isLoop,
     routeSegments: stats.routeSegments,
-    warnings,
+    warnings: warnings.map(w => ({ code: w.code, message: w.message })),
     validationStatus: "needs_validation",
     updatedAt: now
   };
@@ -112,7 +114,7 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
     segments: stats.routeSegments,
     updatedAt: now
   });
-  await writeJsonFile(join(project.folderPath, "route_segments.geojson"), buildSegmentsGeoJson(project.id, stats.segmentLines));
+  await writeJsonFile(join(project.folderPath, "route_segments.geojson"), buildSegmentsGeoJson(project.id, stats.segmentLines, points));
 
   return summary;
 }
@@ -157,8 +159,8 @@ function parseGpxPoints(xml: string): { points: GpxPoint[]; warnings: RouteWarni
       time: timeMatch ? timeMatch[1] : undefined
     });
   }
-  warnings.push({ code: source, message: `Analyzed GPX using ${source === "track_points" ? "track points" : "route points"}.` });
-  if (skipped > 0) warnings.push({ code: "invalid_points_skipped", message: `Skipped ${skipped} GPX point(s) with invalid coordinates.` });
+  warnings.push({ code: source, message: `Analyzed GPX using ${source === "track_points" ? "track points" : "route points"}.`, severity: "low" });
+  if (skipped > 0) warnings.push({ code: "invalid_points_skipped", message: `Skipped ${skipped} GPX point(s) with invalid coordinates.`, severity: "medium" });
 
   return { points, warnings };
 }
@@ -224,32 +226,46 @@ function calculateStats(points: GpxPoint[]) {
   const hasElevation = points.some(p => p.ele !== undefined);
   const hasTime = points.some(p => p.time !== undefined);
   const elapsedHours = elapsedTimeHours(points);
-  if (!hasElevation) warnings.push({ code: "missing_elevation", message: "GPX does not contain elevation data." });
-  if (!hasTime) warnings.push({ code: "missing_timestamps", message: "GPX does not contain timestamps, so duration is estimated by category." });
-  if (distanceKm < 1) warnings.push({ code: "suspiciously_short_track", message: `GPX track is suspiciously short (${distanceKm.toFixed(2)} km).` });
+  if (!hasElevation) warnings.push({ code: "missing_elevation", message: "GPX does not contain elevation data.", severity: "medium" });
+  if (!hasTime) warnings.push({ code: "missing_timestamps", message: "GPX does not contain timestamps, so duration is estimated by category.", severity: "low" });
+  if (distanceKm < 1) warnings.push({ code: "suspiciously_short_track", message: `GPX track is suspiciously short (${distanceKm.toFixed(2)} km).`, severity: "high" });
 
   return { distanceKm, elevationGainM, isLoop, hasElevation, hasTime, elapsedHours, elevationProfile, routeSegments, segmentLines, warnings };
 }
 
-function buildSegmentsGeoJson(projectId: string, segments: Array<RouteSegment & { coordinates: number[][]; pointCount: number }>) {
+function buildSegmentsGeoJson(projectId: string, segments: Array<RouteSegment & { coordinates: number[][]; pointCount: number }>, fullPoints: GpxPoint[]) {
   return {
     type: "FeatureCollection",
     properties: { projectId },
-    features: segments.map((segment) => ({
-      type: "Feature",
-      properties: {
-        index: segment.index,
-        distanceKm: segment.distanceKm,
-        elevationGainM: segment.elevationGainM ?? 0,
-        pointCount: segment.pointCount,
-        start: segment.from,
-        end: segment.to
+    features: [
+      {
+        type: "Feature",
+        properties: {
+          type: "full_track",
+          pointCount: fullPoints.length
+        },
+        geometry: {
+          type: "LineString",
+          coordinates: fullPoints.map((p) => [p.lon, p.lat])
+        }
       },
-      geometry: {
-        type: "LineString",
-        coordinates: segment.coordinates
-      }
-    }))
+      ...segments.map((segment) => ({
+        type: "Feature",
+        properties: {
+          index: segment.index,
+          distanceKm: segment.distanceKm,
+          elevationGainM: segment.elevationGainM ?? 0,
+          pointCount: segment.pointCount,
+          start: segment.from,
+          end: segment.to,
+          type: "segment"
+        },
+        geometry: {
+          type: "LineString",
+          coordinates: segment.coordinates
+        }
+      }))
+    ]
   };
 }
 
@@ -263,19 +279,12 @@ function elapsedTimeHours(points: GpxPoint[]): number | undefined {
   return Math.round(((end - start) / 3_600_000) * 10) / 10;
 }
 
-function estimateTime(category: string, distanceKm: number, elapsedHours?: number): number {
+function estimateTime(category: string, distanceKm: number, elevationGainM: number, elapsedHours?: number): number {
   if (elapsedHours && elapsedHours > 0) return elapsedHours;
-  const speedByCategory: Record<string, number> = {
-    motorcycle: 45,
-    roadtrip: 55,
-    cycling: 18,
-    running: 8,
-    hiking: 4,
-    trekking: 3.5,
-    city_walk: 3.5
-  };
-  const speed = speedByCategory[category] ?? 5;
-  return Math.max(0.1, Math.round((distanceKm / speed) * 10) / 10);
+  if (category === "motorcycle") return Math.max(0.1, Math.round((distanceKm / 45) * 10) / 10);
+  if (category === "bike" || category === "cycling") return Math.max(0.1, Math.round((distanceKm / 15) * 10) / 10);
+  if (category === "hiking" || category === "trekking") return Math.max(0.1, Math.round(((distanceKm / 4) + (elevationGainM / 600)) * 10) / 10);
+  return Math.max(0.1, Math.round((distanceKm / 10) * 10) / 10);
 }
 
 function formatPoint(point: GpxPoint): string {

@@ -77,7 +77,12 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
         "unknown values",
         "this route covers...",
         "generic safety",
-        "not available in mvp"
+        "not available in mvp",
+        "unknown",
+        "tbd",
+        "standard outdoor safety rules apply",
+        "plan ahead for water stops",
+        "based on collected research"
       ];
       for (const phrase of phrases) {
         if (lower.includes(phrase)) {
@@ -132,7 +137,18 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
     issues.push({ rule: "missing_route_summary", message: "route_summary.json is missing or invalid." });
   }
 
-  if (await fileExists(pPath("route.gpx")) && !(await fileExists(pPath("route_segments.geojson")))) {
+  let hasGpxInput = false;
+  if (await fileExists(pPath("route.gpx"))) hasGpxInput = true;
+  try {
+    if (await fileExists(pPath("input/manifest.json"))) {
+      const manifest = await readJsonFile<any>(pPath("input/manifest.json"));
+      if (manifest?.items?.some((i: any) => i.type === "gpx")) {
+        hasGpxInput = true;
+      }
+    }
+  } catch {}
+
+  if (hasGpxInput && !(await fileExists(pPath("route_segments.geojson")))) {
     issues.push({ rule: "missing_route_segments_geojson", message: "route_segments.geojson is required when GPX exists." });
   }
 

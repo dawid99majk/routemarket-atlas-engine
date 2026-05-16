@@ -172,42 +172,64 @@ export async function saveProjectApprovalDecision(input: {
       } catch {}
     } else if (input.stage === "poi_approval") {
       let changedPoi = 0;
+      const candidatePath = join(input.project.folderPath, "poi_candidates.json");
+      try {
+        const candidateData = await readJsonFile<any>(candidatePath);
+        if (candidateData && Array.isArray(candidateData.pois)) {
+          for (const candidate of candidateData.pois) {
+            if (typeof candidate.lat === "number" && typeof candidate.lng === "number" && (candidate.lat !== 0 || candidate.lng !== 0)) {
+              candidate.approvalStatus = "approved";
+              changedPoi += 1;
+            }
+          }
+          await writeJsonFile(candidatePath, candidateData);
+        }
+      } catch {}
+
       const poiPath = join(input.project.folderPath, "poi.geojson");
       try {
         const geojson = await readJsonFile<any>(poiPath);
-        for (const feature of geojson.features) {
-          if (feature.properties.status === "suggested") {
-            feature.properties.status = "confirmed";
-            changedPoi += 1;
+        if (geojson && Array.isArray(geojson.features)) {
+          for (const feature of geojson.features) {
+            if (feature.geometry?.coordinates?.length === 2) {
+              feature.properties = feature.properties || {};
+              feature.properties.approvalStatus = "approved";
+              changedPoi += 1;
+            }
           }
+          await writeJsonFile(poiPath, geojson);
         }
-        await writeJsonFile(poiPath, geojson);
-      } catch {}
-      const candidatePath = join(input.project.folderPath, "poi_candidates.json");
-      try {
-        const candidates = await readJsonFile<any[]>(candidatePath);
-        for (const candidate of candidates) {
-          if (candidate.status === "suggested") {
-            candidate.status = "confirmed";
-            changedPoi += 1;
-          }
-        }
-        await writeJsonFile(candidatePath, candidates);
       } catch {}
       record.audit.changedPoi = changedPoi;
     } else if (input.stage === "claims_approval") {
       const claimsPath = join(input.project.folderPath, "claims.json");
+      const packPath = join(input.project.folderPath, "research_pack.json");
       try {
         const claims = await readJsonFile<any[]>(claimsPath);
+        
+        let creatorSourceIds = new Set<string>();
+        try {
+          const pack = await readJsonFile<any>(packPath);
+          if (pack && Array.isArray(pack.materials)) {
+            for (const mat of pack.materials) {
+              if (mat.trustLevel === "creator") {
+                creatorSourceIds.add(mat.id);
+              }
+            }
+          }
+        } catch {}
+
         let verifiedClaims = 0;
         let likelyClaims = 0;
         let unchangedClaims = 0;
         for (const claim of claims) {
-          if (claim.status === "needs_creator_review" && hasCreatorSource(claim)) {
+          const isFromCreator = Array.isArray(claim.sources) && claim.sources.some((s: string) => creatorSourceIds.has(s) || s.startsWith("mat_note") || s.startsWith("mat_document") || s.includes("note"));
+          
+          if (claim.status === "needs_creator_review" && isFromCreator) {
             claim.status = "verified";
             claim.needsHumanReview = false;
             verifiedClaims += 1;
-          } else if (claim.status === "uncertain" && (claim.sources?.length ?? 0) > 1) {
+          } else if (claim.status === "uncertain" && (claim.sources?.length ?? 0) >= 2) {
             claim.status = "likely";
             claim.needsHumanReview = true;
             likelyClaims += 1;
