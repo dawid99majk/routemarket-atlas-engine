@@ -17,5 +17,4 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY docs ./docs
 RUN mkdir -p /app/data /app/routes
-EXPOSE 8787
 CMD ["node", "dist/apps/api/src/index.js"]

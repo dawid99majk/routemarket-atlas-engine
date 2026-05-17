@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import type { ProjectRepository } from "../../../packages/atlas-core/src/index.js";
 
 export type JobStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed";
 
@@ -48,62 +49,78 @@ export class JobManager {
   private readonly jobs = new Map<string, AtlasJob>();
   private readonly locks = new Map<string, string>();
   private readonly persistFile?: string;
+  private readonly repository?: ProjectRepository;
 
-  constructor(private readonly options: { maxJobs?: number; jobsDir?: string } = {}) {
+  constructor(private readonly options: { maxJobs?: number; jobsDir?: string; repository?: ProjectRepository } = {}) {
+    this.repository = options.repository;
     if (options.jobsDir) {
       this.persistFile = join(options.jobsDir, "jobs_persistence.json");
-      this.initPersistence(options.jobsDir);
     }
+    this.initPersistence();
   }
 
-  private initPersistence(dir: string) {
-    try {
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
+  private async initPersistence() {
+    if (this.repository) {
+      try {
+        const persisted = await this.repository.loadArtifact("__system__", "active_jobs");
+        if (persisted && Array.isArray(persisted)) {
+          this.loadJobs(persisted);
+        }
+      } catch {
+        // System project might not exist yet
       }
-    } catch {}
-
-    if (!this.persistFile) return;
-
-    try {
-      if (existsSync(this.persistFile)) {
+    } else if (this.persistFile && existsSync(this.persistFile)) {
+      try {
         const content = readFileSync(this.persistFile, "utf8");
         const persistedJobs: AtlasJob[] = JSON.parse(content);
-        for (const job of persistedJobs) {
-          if (job.status === "running" || job.status === "queued") {
-            job.status = "failed";
-            job.error = "process_restarted";
-            job.updatedAt = new Date().toISOString();
-          }
-          job.logs = []; // logs remain exclusively in RAM
-          this.jobs.set(job.id, job);
-          
-          // Only maintain locks for jobs that are still valid blocks (waiting for approval)
-          // Finished or failed (including restarted) jobs should not hold locks.
-          if (job.projectSlug && job.status === "waiting_for_approval") {
-            this.locks.set(job.projectSlug, job.id);
-          }
-        }
-        // Save back immediately to mark active jobs as failed
-        this.persistState();
+        this.loadJobs(persistedJobs);
+      } catch (e) {
+        console.error("Failed to load jobs persistence from " + this.persistFile, e);
       }
-    } catch (e) {
-      console.error("Failed to load jobs persistence from " + this.persistFile, e);
     }
   }
 
-  private persistState() {
-    if (!this.persistFile) return;
-    try {
-      const activeAndWaiting = Array.from(this.jobs.values())
-        .filter(j => j.status === "queued" || j.status === "running" || j.status === "waiting_for_approval")
-        .map(job => {
-          const { logs, ...jobWithoutLogs } = job;
-          return jobWithoutLogs;
-        });
-      writeFileSync(this.persistFile, JSON.stringify(activeAndWaiting, null, 2), "utf8");
-    } catch (e) {
-      console.error("Failed to persist jobs state", e);
+  private loadJobs(persistedJobs: AtlasJob[]) {
+    for (const job of persistedJobs) {
+      if (job.status === "running" || job.status === "queued") {
+        job.status = "failed";
+        job.error = "process_restarted";
+        job.updatedAt = new Date().toISOString();
+      }
+      job.logs = []; // logs remain exclusively in RAM
+      this.jobs.set(job.id, job);
+      
+      if (job.projectSlug && job.status === "waiting_for_approval") {
+        this.locks.set(job.projectSlug, job.id);
+      }
+    }
+    this.persistState();
+  }
+
+  private async persistState() {
+    const activeAndWaiting = Array.from(this.jobs.values())
+      .filter(j => j.status === "queued" || j.status === "running" || j.status === "waiting_for_approval")
+      .map(job => {
+        const { logs, ...jobWithoutLogs } = job;
+        return jobWithoutLogs;
+      });
+
+    if (this.repository) {
+      try {
+        await this.repository.saveArtifact("__system__", "active_jobs", activeAndWaiting);
+      } catch {
+        // Might fail if __system__ project doesn't exist. 
+      }
+    }
+
+    if (this.persistFile) {
+      try {
+        const dir = join(this.persistFile, "..");
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        writeFileSync(this.persistFile, JSON.stringify(activeAndWaiting, null, 2), "utf8");
+      } catch (e) {
+        console.error("Failed to persist jobs state", e);
+      }
     }
   }
 

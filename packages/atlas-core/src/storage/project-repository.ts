@@ -55,6 +55,7 @@ export interface ProjectRepository {
   
   exists(slug: string, file: string): Promise<boolean>;
   
+  loadArtifact(slug: string, type: string): Promise<any>;
   saveArtifact(slug: string, type: string, data: any): Promise<void>;
 
   getProjectPath(slug: string): string;

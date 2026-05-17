@@ -231,6 +231,12 @@ export class FileProjectRepository implements ProjectRepository {
     return exists(join(this.getProjectPath(slug), file));
   }
 
+  async loadArtifact(slug: string, type: string): Promise<any> {
+    const path = join(this.getProjectPath(slug), `${type}.json`);
+    if (!(await exists(path))) return undefined;
+    return readJsonFile<any>(path);
+  }
+
   async saveArtifact(slug: string, type: string, data: any): Promise<void> {
     const fileName = `${type}.json`;
     await writeJsonFile(join(this.getProjectPath(slug), fileName), data);

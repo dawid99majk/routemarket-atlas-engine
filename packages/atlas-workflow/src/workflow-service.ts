@@ -28,7 +28,7 @@ import {
   prepareMediaPack,
   writeReviewChecklist
 } from "../../atlas-writer/src/index.js";
-import { listProjectArtifacts } from "./artifacts.js";
+import { listProjectArtifactsFromRepository } from "./artifacts.js";
 import { buildDashboardSummary } from "./dashboard.js";
 import { appendProjectEvent, listProjectEvents } from "./events.js";
 import { buildProjectExportBundle } from "./export.js";
@@ -533,14 +533,14 @@ export class AtlasWorkflowService {
     const project = await this.repository.getProject(projectSlug);
     return {
       project,
-      artifacts: await listProjectArtifacts(project.folderPath)
+      artifacts: await listProjectArtifactsFromRepository(project.id, this.repository)
     };
   }
 
   async getProjectBundle(projectSlug: string) {
     const project = await this.repository.getProject(projectSlug);
     const [artifacts, events] = await Promise.all([
-      listProjectArtifacts(project.folderPath),
+      listProjectArtifactsFromRepository(project.id, this.repository),
       listProjectEvents(project.id, this.repository)
     ]);
     return { project, artifacts, events };
@@ -549,7 +549,7 @@ export class AtlasWorkflowService {
   async assessReadiness(projectSlug: string) {
     const project = await this.repository.getProject(projectSlug);
     const [artifacts, sources, claims] = await Promise.all([
-      listProjectArtifacts(project.folderPath),
+      listProjectArtifactsFromRepository(project.id, this.repository),
       this.loadSources(projectSlug),
       this.loadClaims(projectSlug)
     ]);
@@ -565,7 +565,7 @@ export class AtlasWorkflowService {
   async getReview(projectSlug: string) {
     const project = await this.repository.getProject(projectSlug);
     const [artifacts, sources, claims] = await Promise.all([
-      listProjectArtifacts(project.folderPath),
+      listProjectArtifactsFromRepository(project.id, this.repository),
       this.loadSources(projectSlug),
       this.loadClaims(projectSlug)
     ]);
@@ -602,7 +602,7 @@ export class AtlasWorkflowService {
 
   async exportProject(projectSlug: string) {
     const { project, artifacts, events } = await this.getProjectBundle(projectSlug);
-    return buildProjectExportBundle({ project, artifacts, events });
+    return buildProjectExportBundle({ project, artifacts, events, repository: this.repository });
   }
 
   async archiveProject(projectSlug: string, reason?: string): Promise<RouteProject> {

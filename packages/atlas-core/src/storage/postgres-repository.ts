@@ -143,7 +143,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadSources(slug: string): Promise<Source[]> {
-    return this.loadArtifact(slug, "sources", z.array(SourceSchema), []);
+    return this._loadArtifactInternal(slug, "sources", z.array(SourceSchema), []);
   }
 
   async saveSources(slug: string, sources: Source[]): Promise<void> {
@@ -151,7 +151,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadClaims(slug: string): Promise<Claim[]> {
-    return this.loadArtifact(slug, "claims", z.array(ClaimSchema), []);
+    return this._loadArtifactInternal(slug, "claims", z.array(ClaimSchema), []);
   }
 
   async saveClaims(slug: string, claims: Claim[]): Promise<void> {
@@ -159,7 +159,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadApprovals(slug: string): Promise<any> {
-    return this.loadArtifact(slug, "approvals", z.any(), { projectId: slug, approvals: [] });
+    return this._loadArtifactInternal(slug, "approvals", z.any(), { projectId: slug, approvals: [] });
   }
 
   async saveApprovals(slug: string, approvals: any): Promise<void> {
@@ -167,7 +167,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadSummary(slug: string): Promise<RouteSummary | undefined> {
-    return this.loadArtifact(slug, "route_summary", z.any(), undefined);
+    return this._loadArtifactInternal(slug, "route_summary", z.any(), undefined);
   }
 
   async saveSummary(slug: string, summary: RouteSummary): Promise<void> {
@@ -175,7 +175,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadWorkflowState(slug: string): Promise<any> {
-    return this.loadArtifact(slug, "workflow_state", z.any(), { completedSteps: [] });
+    return this._loadArtifactInternal(slug, "workflow_state", z.any(), { completedSteps: [] });
   }
 
   async saveWorkflowState(slug: string, state: any): Promise<void> {
@@ -183,7 +183,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadMissingInputs(slug: string): Promise<any> {
-    return this.loadArtifact(slug, "missing_inputs", z.any(), { missing: [] });
+    return this._loadArtifactInternal(slug, "missing_inputs", z.any(), { missing: [] });
   }
 
   async saveMissingInputs(slug: string, missing: any): Promise<void> {
@@ -191,7 +191,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadReviewDecision(slug: string): Promise<any> {
-    return this.loadArtifact(slug, "review_decision", z.any(), undefined);
+    return this._loadArtifactInternal(slug, "review_decision", z.any(), undefined);
   }
 
   async saveReviewDecision(slug: string, decision: any): Promise<void> {
@@ -199,7 +199,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadEvents(slug: string): Promise<ProjectEvent[]> {
-    return this.loadArtifact(slug, "events", z.array(z.any()), []);
+    return this._loadArtifactInternal(slug, "events", z.array(z.any()), []);
   }
 
   async saveEvents(slug: string, events: ProjectEvent[]): Promise<void> {
@@ -207,7 +207,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   async loadInputManifest(slug: string): Promise<InputManifest> {
-    return this.loadArtifact(slug, "input_manifest", InputManifestSchema, { projectId: slug, updatedAt: new Date().toISOString(), items: [] });
+    return this._loadArtifactInternal(slug, "input_manifest", InputManifestSchema, { projectId: slug, updatedAt: new Date().toISOString(), items: [] });
   }
 
   async saveInputManifest(slug: string, manifest: InputManifest): Promise<void> {
@@ -273,7 +273,11 @@ export class PostgresProjectRepository implements ProjectRepository {
     if (file) await this.mirrorJson(slug, file, data);
   }
 
-  private async loadArtifact<T>(slug: string, type: string, schema: z.ZodSchema<T>, defaultValue: T): Promise<T> {
+  async loadArtifact(slug: string, type: string): Promise<any> {
+    return this._loadArtifactInternal(slug, type, z.any(), undefined);
+  }
+
+  private async _loadArtifactInternal<T>(slug: string, type: string, schema: z.ZodSchema<T>, defaultValue: T): Promise<T> {
     const { data, error } = await this.client
       .from("atlas_artifacts")
       .select("data")
@@ -299,6 +303,7 @@ export class PostgresProjectRepository implements ProjectRepository {
   }
 
   private async saveArtifactRow(slug: string, type: string, data: any): Promise<void> {
+    if (slug === "__system__") await this.ensureSystemProject();
     const { error } = await this.client
       .from("atlas_artifacts")
       .upsert({
@@ -306,6 +311,30 @@ export class PostgresProjectRepository implements ProjectRepository {
         type,
         data,
         updated_at: new Date().toISOString()
+      });
+    if (error) throw error;
+  }
+
+  private async ensureSystemProject(): Promise<void> {
+    const now = new Date().toISOString();
+    const project = RouteProjectSchema.parse({
+      id: "__system__",
+      title: "Atlas system state",
+      slug: "__system__",
+      category: "system",
+      region: "internal",
+      language: "en",
+      status: "research_needed",
+      folderPath: this.getProjectPath("__system__"),
+      createdAt: now,
+      updatedAt: now
+    });
+    const { error } = await this.client
+      .from("atlas_projects")
+      .upsert({
+        slug: "__system__",
+        data: project,
+        updated_at: now
       });
     if (error) throw error;
   }

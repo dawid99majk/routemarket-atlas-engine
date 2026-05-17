@@ -24,6 +24,8 @@ import {
   WriteProjectFileBodySchema
 } from "./schemas.js";
 
+import type { ProjectRepository } from "../../../packages/atlas-core/src/index.js";
+
 export type AtlasApiOptions = {
   rootDir: string;
   port?: number;
@@ -32,6 +34,7 @@ export type AtlasApiOptions = {
   logRequests?: boolean;
   maxJobs?: number;
   jobsDir?: string;
+  repository?: ProjectRepository;
 };
 
 type RouteParams = Record<string, string>;
@@ -70,13 +73,9 @@ function validateSlug(slug: string) {
 }
 
 export function createAtlasApiServer(options: AtlasApiOptions): Server {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const repository = (supabaseUrl && supabaseKey)
-    ? new PostgresProjectRepository(supabaseUrl, supabaseKey, options.rootDir)
-    : new FileProjectRepository(options.rootDir);
+  const repository = options.repository ?? new FileProjectRepository(options.rootDir);
   const service = new AtlasWorkflowService({ rootDir: options.rootDir, repository });
-  const jobs = new JobManager({ maxJobs: options.maxJobs, jobsDir: options.jobsDir });
+  const jobs = new JobManager({ maxJobs: options.maxJobs, jobsDir: options.jobsDir, repository });
   const corsOrigin = options.corsOrigin ?? "*";
   const apiToken = options.apiToken;
   const logRequests = options.logRequests ?? false;
@@ -217,7 +216,49 @@ function createRoutes(): Route[] {
     route("GET", "/jobs/pending-approvals", async ({ jobs }) => ({
       jobs: jobs.list().filter(j => j.status === "waiting_for_approval")
     })),
+    route("GET", "/api/jobs/pending-approvals", async ({ jobs }) => ({
+      jobs: jobs.list()
+        .filter(j => j.status === "waiting_for_approval")
+        .map(j => ({
+          id: j.id,
+          type: j.type,
+          status: j.status,
+          progress: j.progress,
+          currentStep: j.currentStep,
+          updatedAt: j.updatedAt,
+          pendingApprovalContext: j.pendingApprovalContext
+        }))
+    })),
     route("POST", "/jobs/:id/approve", async ({ req, params, jobs, service }) => {
+      const body = JobApprovalBodySchema.parse(await readJson(req));
+      const job = jobs.get(params.id);
+      if (!job) throw notFound("Job not found.");
+      if (job.status !== "waiting_for_approval") throw badRequest("Job is not waiting for approval.");
+
+      // Resume logic
+      const projectSlug = job.type.split(":")[1];
+      if (!projectSlug) throw badRequest("Invalid job type for approval.");
+      validateSlug(projectSlug);
+
+      const nextStepMap: Record<string, string> = {
+        "gpx_summary_approval": "claims",
+        "claims_approval": "pois",
+        "poi_approval": "concept",
+        "concept_approval": "guide_outline",
+        "guide_outline_approval": "guide",
+        "guide_final_approval": "finalize"
+      };
+      const stage = job.currentStep ?? "";
+      await service.approveStage(projectSlug, stage, "approved", "Approved through job resume endpoint.");
+      const nextStep = nextStepMap[stage] ?? "input";
+
+      jobs.resume(params.id, body.approvalData, (update) => 
+        service.runMvp2WithProgress(projectSlug, update, nextStep)
+      );
+
+      return { message: "Job resumed.", jobId: params.id, nextStep };
+    }),
+    route("POST", "/api/jobs/:id/approve", async ({ req, params, jobs, service }) => {
       const body = JobApprovalBodySchema.parse(await readJson(req));
       const job = jobs.get(params.id);
       if (!job) throw notFound("Job not found.");
@@ -441,6 +482,10 @@ function apiManifest(authEnabled: boolean) {
       "POST /projects/:slug/deep-research",
       "POST /projects/:slug/run-mvp2",
       "POST /projects/:slug/jobs/run-mvp2",
+      "GET /jobs/pending-approvals",
+      "POST /jobs/:id/approve",
+      "GET /api/jobs/pending-approvals",
+      "POST /api/jobs/:id/approve",
       "GET /jobs",
       "POST /jobs/prune",
       "GET /jobs/:id",
