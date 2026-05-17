@@ -180,6 +180,17 @@ function createRoutes(): Route[] {
       const body = CollectSourcesBodySchema.parse(await readJson(req));
       return { sources: await service.collectSources(params.slug, body) };
     }),
+    route("POST", "/projects/:slug/jobs/collect-sources", async ({ req, params, service, jobs }) => {
+      const body = CollectSourcesBodySchema.parse(await readJson(req));
+      return {
+        job: jobs.start(`collect-sources:${params.slug}`, async (update) => {
+          update({ message: "Collecting route sources.", progress: 10, currentStep: "collect_sources" });
+          const sources = await service.collectSources(params.slug, body);
+          update({ message: `Collected ${sources.length} sources.`, progress: 100, currentStep: "collect_sources" });
+          return { sourceCount: sources.length };
+        }, params.slug)
+      };
+    }),
     route("POST", "/projects/:slug/inputs/notes", async ({ req, params, service }) => {
       const body = AddNoteBodySchema.parse(await readJson(req, 2_500_000)); // 2.5MB raw buffer limit for 2MB content string
       return service.addNoteText(params.slug, body);
@@ -207,6 +218,17 @@ function createRoutes(): Route[] {
     route("POST", "/projects/:slug/deep-research", async ({ req, params, service }) => {
       const body = DeepResearchBodySchema.parse(await readJson(req));
       return service.runDeepResearch(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/jobs/deep-research", async ({ req, params, service, jobs }) => {
+      const body = DeepResearchBodySchema.parse(await readJson(req));
+      return {
+        job: jobs.start(`deep-research:${params.slug}`, async (update) => {
+          update({ message: "Running Gemini research enrichment.", progress: 10, currentStep: "deep_research" });
+          const report = await service.runDeepResearch(params.slug, body);
+          update({ message: `Processed ${report.processedSourceCount} sources.`, progress: 100, currentStep: "deep_research" });
+          return report;
+        }, params.slug)
+      };
     }),
     route("POST", "/projects/:slug/run-mvp2", async ({ req, params, service }) => {
       EmptyBodySchema.parse(await readJson(req));
@@ -315,6 +337,17 @@ function createRoutes(): Route[] {
     route("POST", "/projects/:slug/prepare-publish", async ({ req, params, service }) => {
       EmptyBodySchema.parse(await readJson(req));
       return service.preparePublish(params.slug);
+    }),
+    route("POST", "/projects/:slug/jobs/prepare-publish", async ({ req, params, service, jobs }) => {
+      EmptyBodySchema.parse(await readJson(req));
+      return {
+        job: jobs.start(`prepare-publish:${params.slug}`, async (update) => {
+          update({ message: "Preparing RouteMarket payload.", progress: 20, currentStep: "prepare_publish" });
+          const payload = await service.preparePublish(params.slug);
+          update({ message: "RouteMarket payload prepared.", progress: 100, currentStep: "prepare_publish" });
+          return payload;
+        }, params.slug)
+      };
     }),
     route("GET", "/projects/:slug/files", async ({ params, service, url }) => {
       const file = url.searchParams.get("path");
