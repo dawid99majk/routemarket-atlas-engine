@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GoogleGroundedSearchProvider } from "../packages/atlas-research/src/providers/google-grounded-search-provider.js";
 import { createDeepResearchProvider, createSearchProvider, getSearchProviderStatus } from "../packages/atlas-research/src/providers/provider-factory.js";
+
 
 describe("search providers", () => {
   it("maps Google grounded search results into source candidates", async () => {
@@ -157,7 +158,7 @@ describe("GeminiDeepResearchProvider", () => {
   it("extracts POIs and claims from scraped web content", async () => {
     const origFetch = globalThis.fetch;
     try {
-      globalThis.fetch = vi.fn(async (url) => {
+      globalThis.fetch = vi.fn(async (url: any) => {
         if (String(url).includes("example.com")) {
           return new Response("<html><body>Stelvio Pass is a great pass. Closed in winter.</body></html>", { status: 200 });
         }
