@@ -1,7 +1,6 @@
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RouteProject, Source } from "../../../atlas-core/src/index.js";
-import { writeJsonFile } from "../../../atlas-core/src/index.js";
+import type { RouteProject, Source, ProjectRepository } from "../../../atlas-core/src/index.js";
 import { MockForumProvider, MockVideoProvider } from "../mock/mock-providers.js";
 import { expandKeywords } from "../keyword-expansion.js";
 import { createSearchProvider, type SearchProviderMode } from "../providers/provider-factory.js";
@@ -10,7 +9,8 @@ export type CollectSourcesInput = {
   project: RouteProject;
   limit?: number;
   provider?: SearchProviderMode;
-  braveApiKey?: string;
+  googleApiKey?: string;
+  repository?: ProjectRepository;
 };
 
 export async function collectSources(input: CollectSourcesInput): Promise<Source[]> {
@@ -22,7 +22,7 @@ export async function collectSources(input: CollectSourcesInput): Promise<Source
   const query = keywords[0] ?? input.project.title;
   const { provider: searchProvider, providerName } = createSearchProvider({
     mode: input.provider,
-    braveApiKey: input.braveApiKey
+    googleApiKey: input.googleApiKey
   });
   const videoProvider = new MockVideoProvider();
   const forumProvider = new MockForumProvider();
@@ -41,12 +41,21 @@ export async function collectSources(input: CollectSourcesInput): Promise<Source
     ...candidate
   }));
 
-  await writeJsonFile(join(input.project.folderPath, "sources.json"), sources);
-  await appendFile(
-    join(input.project.folderPath, "notes.md"),
-    `\n## Source collection ${dateFound}\n\nProvider: ${providerName}\nCollected ${sources.length} sources for query: ${query}\n`,
-    "utf8"
-  );
+  const notesUpdate = `\n## Source collection ${dateFound}\n\nProvider: ${providerName}\nCollected ${sources.length} sources for query: ${query}\n`;
+
+  if (input.repository) {
+    await input.repository.saveSources(input.project.id, sources);
+    try {
+      const existingNotes = await input.repository.readProjectFile(input.project.id, "notes.md");
+      await input.repository.writeProjectFile(input.project.id, "notes.md", existingNotes + notesUpdate);
+    } catch {
+      await input.repository.writeProjectFile(input.project.id, "notes.md", notesUpdate);
+    }
+  } else {
+    const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+    await writeJsonFile(join(input.project.folderPath, "sources.json"), sources);
+    await appendFile(join(input.project.folderPath, "notes.md"), notesUpdate, "utf8");
+  }
 
   return sources;
 }

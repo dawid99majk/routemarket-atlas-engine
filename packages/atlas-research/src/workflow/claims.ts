@@ -1,28 +1,26 @@
 import { join } from "node:path";
 import { 
-  readJsonFile, 
-  writeJsonFile, 
   type RouteProject, 
   type Claim, 
   type ResearchPack, 
   type RouteSummary,
   type MissingInputs,
-  type MissingInputItem
+  type ProjectRepository
 } from "../../../atlas-core/src/index.js";
 
-export async function generateClaims(project: RouteProject): Promise<Claim[]> {
+export async function generateClaims(project: RouteProject, repository?: ProjectRepository): Promise<Claim[]> {
   const now = new Date().toISOString();
-  const researchPackPath = join(project.folderPath, "research_pack.json");
-  const routeSummaryPath = join(project.folderPath, "route_summary.json");
-  const claimsPath = join(project.folderPath, "claims.json");
-
-  const preservedClaims = await readExistingNonGeneratedClaims(project);
+  
+  const preservedClaims = await readExistingNonGeneratedClaims(project, repository);
   const claims: Claim[] = [...preservedClaims];
 
   // 1. Generate technical claims from GPX summary
   try {
-    const summary = await readJsonFile<RouteSummary>(routeSummaryPath);
-    if (summary.distanceKm && summary.distanceKm > 0) {
+    const summary = repository 
+      ? await repository.loadSummary(project.id)
+      : await readJsonFileFallback<RouteSummary>(join(project.folderPath, "route_summary.json"));
+      
+    if (summary && summary.distanceKm && summary.distanceKm > 0) {
       claims.push({
         id: `claim_tech_dist_${Date.now()}`,
         topicId: project.id,
@@ -60,7 +58,10 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
 
   // 2. Generate content claims from Research Pack
   try {
-    const pack = await readJsonFile<ResearchPack>(researchPackPath);
+    const pack = repository
+      ? await repository.readProjectFile(project.id, "research_pack.json").then(c => JSON.parse(c) as ResearchPack)
+      : await readJsonFileFallback<ResearchPack>(join(project.folderPath, "research_pack.json"));
+
     for (const material of pack.materials) {
       if (material.trustLevel === "creator") {
         const sentences = material.content.split(/[.!?]\s+/);
@@ -102,16 +103,32 @@ export async function generateClaims(project: RouteProject): Promise<Claim[]> {
         requiredFor: "guide_final"
       }]
     };
-    await writeJsonFile(join(project.folderPath, "missing_inputs.json"), missing);
+    if (repository) {
+      await repository.saveMissingInputs(project.id, missing);
+    } else {
+      const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+      await writeJsonFile(join(project.folderPath, "missing_inputs.json"), missing);
+    }
   } else {
     // Clear missing inputs if fixed
     try {
-      const { unlink } = await import("node:fs/promises");
-      await unlink(join(project.folderPath, "missing_inputs.json"));
+      if (repository) {
+        // In a real repo we might have a specific method or just overwrite with empty
+        await repository.saveMissingInputs(project.id, { missing: [] });
+      } else {
+        const { unlink } = await import("node:fs/promises");
+        await unlink(join(project.folderPath, "missing_inputs.json"));
+      }
     } catch {}
   }
 
-  await writeJsonFile(claimsPath, claims);
+  if (repository) {
+    await repository.saveClaims(project.id, claims);
+  } else {
+    const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+    await writeJsonFile(join(project.folderPath, "claims.json"), claims);
+  }
+  
   return claims;
 }
 
@@ -132,9 +149,12 @@ function classifySentence(s: string): string | undefined {
   return undefined;
 }
 
-async function readExistingNonGeneratedClaims(project: RouteProject): Promise<Claim[]> {
+async function readExistingNonGeneratedClaims(project: RouteProject, repository?: ProjectRepository): Promise<Claim[]> {
   try {
-    const existing = await readJsonFile<Claim[]>(join(project.folderPath, "claims.json"));
+    const existing = repository 
+      ? await repository.loadClaims(project.id)
+      : await readJsonFileFallback<Claim[]>(join(project.folderPath, "claims.json"));
+
     // Filter out old placeholder claims
     return existing.filter((claim) => 
       !claim.claim.includes("may contain useful route intelligence") &&
@@ -146,4 +166,9 @@ async function readExistingNonGeneratedClaims(project: RouteProject): Promise<Cl
   } catch {
     return [];
   }
+}
+
+async function readJsonFileFallback<T>(path: string): Promise<T> {
+  const { readJsonFile } = await import("../../../atlas-core/src/index.js");
+  return readJsonFile<T>(path);
 }

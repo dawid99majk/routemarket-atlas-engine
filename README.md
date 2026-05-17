@@ -146,5 +146,5 @@ ATLAS_LOG_REQUESTS=true
 ATLAS_MAX_JOBS=200
 ATLAS_MAX_PERSISTED_LOGS=500
 ATLAS_JOBS_DIR=<optional persistent job folder>
-BRAVE_SEARCH_API_KEY=<optional real search provider>
+GEMINI_API_KEY=<optional Google/Gemini search and research key>
 ```

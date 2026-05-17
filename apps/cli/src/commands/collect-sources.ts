@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { readJsonFile, routesPath, type RouteProject } from "../../../../packages/atlas-core/src/index.js";
 import { collectSources, type SearchProviderMode } from "../../../../packages/atlas-research/src/index.js";
 
-const searchProviderModes = ["auto", "mock", "brave"] as const;
+const searchProviderModes = ["auto", "mock", "google"] as const;
 
 export function registerCollectSourcesCommand(program: Command): void {
   program
@@ -11,7 +11,7 @@ export function registerCollectSourcesCommand(program: Command): void {
     .description("Collect sources for a route project")
     .requiredOption("--project <project>", "Project slug")
     .option("--limit <limit>", "Max sources", "20")
-    .option("--provider <provider>", "Search provider: auto | mock | brave", "auto")
+    .option("--provider <provider>", "Search provider: auto | mock | google", "auto")
     .action(async (options) => {
       const project = await readJsonFile<RouteProject>(join(routesPath(process.cwd(), options.project), "project.json"));
       const sources = await collectSources({ project, limit: Number(options.limit), provider: parseSearchProviderMode(options.provider) });

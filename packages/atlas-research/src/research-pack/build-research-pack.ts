@@ -1,24 +1,25 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { 
-  readJsonFile, 
-  writeJsonFile, 
   type RouteProject, 
   type ResearchPack, 
   type ResearchMaterial,
   type InputManifest,
   type Source,
-  type ResearchTrustLevel
+  type ResearchTrustLevel,
+  type ProjectRepository
 } from "../../../atlas-core/src/index.js";
 
-export async function buildResearchPack(project: RouteProject): Promise<ResearchPack> {
+export async function buildResearchPack(project: RouteProject, repository?: ProjectRepository): Promise<ResearchPack> {
   const now = new Date().toISOString();
-  const manifestPath = join(project.folderPath, "input_manifest.json");
-  const sourcesPath = join(project.folderPath, "sources.json");
-  const researchPackPath = join(project.folderPath, "research_pack.json");
+  
+  const manifest = repository 
+    ? await repository.loadInputManifest(project.id)
+    : await readJsonFileFallback<InputManifest>(join(project.folderPath, "input_manifest.json"));
 
-  const manifest = await readJsonFile<InputManifest>(manifestPath).catch(() => ({ items: [] } as any as InputManifest));
-  const webSources = await readJsonFile<Source[]>(sourcesPath).catch(() => [] as Source[]);
+  const webSources = repository
+    ? await repository.loadSources(project.id)
+    : await readJsonFileFallback<Source[]>(join(project.folderPath, "sources.json"));
 
   const materials: ResearchMaterial[] = [];
 
@@ -28,7 +29,10 @@ export async function buildResearchPack(project: RouteProject): Promise<Research
 
     if (item.type === "note" || item.type === "document") {
       try {
-        const content = await readFile(join(project.folderPath, item.path), "utf8");
+        const content = repository
+          ? await repository.readProjectFile(project.id, item.path)
+          : await readFile(join(project.folderPath, item.path), "utf8");
+
         materials.push({
           id: `mat_${item.id}`,
           inputId: item.id,
@@ -69,9 +73,11 @@ export async function buildResearchPack(project: RouteProject): Promise<Research
   }
 
   // 3. Process deep research if exists
-  const deepResearchPath = join(project.folderPath, "deep_research.json");
   try {
-    const deepResearch = await readJsonFile<any>(deepResearchPath);
+    const deepResearch = repository
+      ? await repository.readProjectFile(project.id, "deep_research.json").then(c => JSON.parse(c) as any)
+      : await readJsonFileFallback<any>(join(project.folderPath, "deep_research.json"));
+
     if (deepResearch && Array.isArray(deepResearch.claims)) {
       materials.push({
         id: `mat_deep_research`,
@@ -104,7 +110,13 @@ export async function buildResearchPack(project: RouteProject): Promise<Research
     }
   };
 
-  await writeJsonFile(researchPackPath, pack);
+  if (repository) {
+    await repository.saveArtifact(project.id, "research_pack", pack);
+  } else {
+    const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+    await writeJsonFile(join(project.folderPath, "research_pack.json"), pack);
+  }
+  
   return pack;
 }
 
@@ -144,4 +156,9 @@ function inferTrustLevel(sourceType: string): ResearchTrustLevel {
     case "forum": return "community";
     default: return "unknown";
   }
+}
+
+async function readJsonFileFallback<T>(path: string): Promise<T> {
+  const { readJsonFile } = await import("../../../atlas-core/src/index.js");
+  return readJsonFile<T>(path);
 }

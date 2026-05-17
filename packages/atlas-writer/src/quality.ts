@@ -1,12 +1,13 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RouteProject, Source } from "../../atlas-core/src/index.js";
+import type { RouteProject, Source, ProjectRepository } from "../../atlas-core/src/index.js";
 
 export type GenerateQualityReportInput = {
   project: RouteProject;
   sources?: Source[];
   gpxValid?: boolean;
   geojsonValid?: boolean;
+  repository?: ProjectRepository;
 };
 
 export async function generateQualityReport(input: GenerateQualityReportInput): Promise<string> {
@@ -62,7 +63,11 @@ ${input.geojsonValid ? "GeoJSON passed basic FeatureCollection validation." : "G
 - Confirm RouteMarket category, tags, and draft content before publishing.
 `;
 
-  await writeFile(join(input.project.folderPath, "quality_report.md"), report, "utf8");
+  if (input.repository) {
+    await input.repository.writeProjectFile(input.project.id, "quality_report.md", report);
+  } else {
+    await writeFile(join(input.project.folderPath, "quality_report.md"), report, "utf8");
+  }
   return report;
 }
 

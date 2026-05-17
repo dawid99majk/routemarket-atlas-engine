@@ -1,10 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RouteProject, Source } from "../../atlas-core/src/index.js";
+import type { RouteProject, Source, ProjectRepository } from "../../atlas-core/src/index.js";
 
 export type GenerateRouteConceptInput = {
   project: RouteProject;
   sources?: Source[];
+  repository?: ProjectRepository;
 };
 
 export async function generateRouteConcept(input: GenerateRouteConceptInput): Promise<string> {
@@ -47,7 +48,11 @@ Current source count: ${sourceCount}
 Status: concept only. Do not publish before source verification, GPX validation, and quality review.
 `;
 
-  await writeFile(join(input.project.folderPath, "route_concept.md"), concept, "utf8");
+  if (input.repository) {
+    await input.repository.writeProjectFile(input.project.id, "route_concept.md", concept);
+  } else {
+    await writeFile(join(input.project.folderPath, "route_concept.md"), concept, "utf8");
+  }
   return concept;
 }
 
@@ -55,7 +60,7 @@ function targetTraveler(category: string): string {
   const map: Record<string, string> = {
     motorcycle: "Adventure rider who wants scenic roads, surface notes, fuel awareness, and offline navigation.",
     hiking: "Independent hiker who wants a clear route, season notes, and safety context.",
-    cycling: "Cyclist who wants a manageable ride with surface and logistics details.",
+    cycling: "Cyclists who wants a manageable ride with surface and logistics details.",
     running: "Runner who wants a clear route, distance confidence, and terrain notes.",
     city_walk: "City explorer who wants a self-guided route with useful stops.",
     roadtrip: "Road trip traveler who wants scenic flow, stops, and realistic timing."

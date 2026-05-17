@@ -4,10 +4,10 @@ import {
   type Claim, 
   type RouteProject, 
   type Source,
-  type ProjectStorageAdapter
+  type ProjectRepository
 } from "../../atlas-core/src/index.js";
 import type { ProjectArtifact } from "./artifacts.js";
-import { appendProjectEvent, listProjectEvents, type ProjectEvent } from "./events.js";
+import { appendProjectEvent, listProjectEvents } from "./events.js";
 import { assessProjectReadiness, type ReadinessReport } from "./readiness.js";
 import { approvalArtifactMap, hashImportantArtifacts } from "./artifact-hashes.js";
 import { readWorkflowState, type WorkflowState } from "./workflow-state.js";
@@ -43,7 +43,7 @@ export type ProjectReviewBundle = {
   };
   recommendedDecision: ReviewDecision;
   latestDecision?: ProjectReviewDecision;
-  recentEvents: ProjectEvent[];
+  recentEvents: import("./events.js").ProjectEvent[];
   approvals: any;
   workflowState: WorkflowState;
   missingInputs: any;
@@ -60,16 +60,16 @@ export type ProjectReviewBundle = {
 
 export async function buildProjectReviewBundle(input: {
   project: RouteProject;
-  storage: ProjectStorageAdapter;
+  repository: ProjectRepository;
   artifacts: ProjectArtifact[];
   sources: Source[];
   claims: Claim[];
   qualityIssues?: import("./quality-gates.js").QualityIssue[];
 }): Promise<ProjectReviewBundle> {
   const readiness = assessProjectReadiness(input);
-  const events = await listProjectEvents(input.project.folderPath);
-  const approvals = await input.storage.loadApprovals(input.project.id);
-  const missingInputs = await input.storage.loadMissingInputs(input.project.id);
+  const events = await listProjectEvents(input.project.id, input.repository);
+  const approvals = await input.repository.loadApprovals(input.project.id);
+  const missingInputs = await input.repository.loadMissingInputs(input.project.id);
   const qualityIssues = input.qualityIssues ?? [];
   const importReadiness = await buildImportReadiness({
     project: input.project,
@@ -89,10 +89,10 @@ export async function buildProjectReviewBundle(input: {
     claimSummary: summarizeClaims(input.claims),
     artifactSummary: summarizeArtifacts(input.artifacts),
     recommendedDecision,
-    latestDecision: await readLatestReviewDecision(input.project.id, input.storage),
+    latestDecision: await readLatestReviewDecision(input.project.id, input.repository),
     recentEvents: events.slice(-10).reverse(),
     approvals,
-    workflowState: await readWorkflowState(input.project),
+    workflowState: await readWorkflowState(input.project, input.repository),
     missingInputs,
     artifactHashes: await hashImportantArtifacts(input.project),
     qualityIssues,
@@ -103,7 +103,7 @@ export async function buildProjectReviewBundle(input: {
 
 export async function saveProjectReviewDecision(input: {
   project: RouteProject;
-  storage: ProjectStorageAdapter;
+  repository: ProjectRepository;
   decision: ReviewDecision;
   reviewer?: string;
   notes?: string;
@@ -114,12 +114,12 @@ export async function saveProjectReviewDecision(input: {
     notes: input.notes,
     decidedAt: new Date().toISOString()
   };
-  await input.storage.saveReviewDecision(input.project.id, review);
+  await input.repository.saveReviewDecision(input.project.id, review);
 
   const status = statusForDecision(input.decision);
   const project = await updateProjectStatus(input.project, status);
-  await input.storage.saveProject(input.project.id, project);
-  await appendProjectEvent(project.folderPath, {
+  await input.repository.saveProject(project);
+  await appendProjectEvent(project.id, input.repository, {
     type: "review.decision",
     message: `Review decision: ${input.decision}.`,
     data: {
@@ -135,13 +135,13 @@ export async function saveProjectReviewDecision(input: {
 
 export async function saveProjectApprovalDecision(input: {
   project: RouteProject;
-  storage: ProjectStorageAdapter;
+  repository: ProjectRepository;
   stage: string;
   decision: ApprovalDecision;
   reviewer?: string;
   notes?: string;
 }): Promise<void> {
-  let approvals = await input.storage.loadApprovals(input.project.id);
+  let approvals = await input.repository.loadApprovals(input.project.id);
   
   const artifactHashes = await hashImportantArtifacts(input.project);
   const record: any = {
@@ -163,22 +163,22 @@ export async function saveProjectApprovalDecision(input: {
   }
 
   approvals.updatedAt = record.decidedAt;
-  await input.storage.saveApprovals(input.project.id, approvals);
+  await input.repository.saveApprovals(input.project.id, approvals);
 
   // Side effects for hardening
   if (input.decision === "approved") {
     if (input.stage === "gpx_summary_approval") {
       try {
-        const summary = await input.storage.loadSummary(input.project.id);
+        const summary = await input.repository.loadSummary(input.project.id);
         if (summary) {
           summary.validationStatus = "validated";
-          await input.storage.saveSummary(input.project.id, summary);
+          await input.repository.saveSummary(input.project.id, summary);
         }
-      } catch {}
+      } catch { }
     } else if (input.stage === "poi_approval") {
       let changedPoi = 0;
       try {
-        const candidateData = JSON.parse(await input.storage.readProjectFile(input.project.id, "poi_candidates.json"));
+        const candidateData = JSON.parse(await input.repository.readProjectFile(input.project.id, "poi_candidates.json"));
         if (candidateData && Array.isArray(candidateData.pois)) {
           for (const candidate of candidateData.pois) {
             if (typeof candidate.lat === "number" && typeof candidate.lng === "number" && (candidate.lat !== 0 || candidate.lng !== 0)) {
@@ -186,12 +186,12 @@ export async function saveProjectApprovalDecision(input: {
               changedPoi += 1;
             }
           }
-          await input.storage.writeProjectFile(input.project.id, "poi_candidates.json", JSON.stringify(candidateData, null, 2));
+          await input.repository.writeProjectFile(input.project.id, "poi_candidates.json", JSON.stringify(candidateData, null, 2));
         }
-      } catch {}
+      } catch { }
 
       try {
-        const geojson = JSON.parse(await input.storage.readProjectFile(input.project.id, "poi.geojson"));
+        const geojson = JSON.parse(await input.repository.readProjectFile(input.project.id, "poi.geojson"));
         if (geojson && Array.isArray(geojson.features)) {
           for (const feature of geojson.features) {
             if (feature.geometry?.coordinates?.length === 2) {
@@ -200,14 +200,14 @@ export async function saveProjectApprovalDecision(input: {
               changedPoi += 1;
             }
           }
-          await input.storage.writeProjectFile(input.project.id, "poi.geojson", JSON.stringify(geojson, null, 2));
+          await input.repository.writeProjectFile(input.project.id, "poi.geojson", JSON.stringify(geojson, null, 2));
         }
-      } catch {}
+      } catch { }
       record.audit.changedPoi = changedPoi;
     } else if (input.stage === "claims_approval") {
       try {
-        const claims = await input.storage.loadClaims(input.project.id);
-        const pack = JSON.parse(await input.storage.readProjectFile(input.project.id, "research_pack.json"));
+        const claims = await input.repository.loadClaims(input.project.id);
+        const pack = JSON.parse(await input.repository.readProjectFile(input.project.id, "research_pack.json"));
         
         let creatorSourceIds = new Set<string>();
         if (pack && Array.isArray(pack.materials)) {
@@ -236,32 +236,28 @@ export async function saveProjectApprovalDecision(input: {
             unchangedClaims += 1;
           }
         }
-        await input.storage.saveClaims(input.project.id, claims);
+        await input.repository.saveClaims(input.project.id, claims);
         record.audit.changedClaims = verifiedClaims + likelyClaims;
         record.audit.verifiedClaims = verifiedClaims;
         record.audit.likelyClaims = likelyClaims;
         record.audit.unchangedClaims = unchangedClaims;
-      } catch {}
+      } catch { }
     }
   }
 
   record.artifactHashes = filterHashesForStage(input.stage, await hashImportantArtifacts(input.project));
   approvals.updatedAt = new Date().toISOString();
-  await input.storage.saveApprovals(input.project.id, approvals);
+  await input.repository.saveApprovals(input.project.id, approvals);
 
-  await appendProjectEvent(input.project.folderPath, {
+  await appendProjectEvent(input.project.id, input.repository, {
     type: "review.approval",
     message: `Approval for ${input.stage}: ${input.decision}.`,
     data: record
   });
 }
 
-export async function readLatestReviewDecision(slug: string, storage: ProjectStorageAdapter): Promise<ProjectReviewDecision | undefined> {
-  return storage.loadReviewDecision(slug);
-}
-
-function hasCreatorSource(claim: any): boolean {
-  return Array.isArray(claim.sources) && claim.sources.some((source: string) => source.startsWith("mat_note") || source.startsWith("mat_document") || source.includes("note"));
+export async function readLatestReviewDecision(slug: string, repository: ProjectRepository): Promise<ProjectReviewDecision | undefined> {
+  return repository.loadReviewDecision(slug);
 }
 
 function filterHashesForStage(stage: string, hashes: Record<string, string>): Record<string, string> {
@@ -320,9 +316,4 @@ function statusForDecision(decision: ReviewDecision): ProjectStatus {
   if (decision === "approved") return "approved_for_publish";
   if (decision === "changes_requested") return "changes_requested";
   return "blocked";
-}
-
-function reviewPath(project: RouteProject): string {
-  // Deprecated, use storage
-  return join(project.folderPath, "review_decision.json");
 }

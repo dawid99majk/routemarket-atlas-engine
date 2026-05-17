@@ -1,24 +1,28 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  readJsonFile,
   type Claim,
   type Poi,
   type RouteProject,
   type RouteSummary,
   type Approvals,
   type MissingInputs,
-  type MissingInputItem
+  type MissingInputItem,
+  type ProjectRepository
 } from "../../atlas-core/src/index.js";
 
-export async function writeGuideOutline(project: RouteProject): Promise<string> {
+export async function writeGuideOutline(project: RouteProject, repository?: ProjectRepository): Promise<string> {
   const outline = `# Outline for ${project.title}
 1. Introduction
 2. Key Highlights
 3. Route Details
 4. Preparation
 5. Conclusion`;
-  await writeFile(join(project.folderPath, "guide_outline.md"), outline, "utf8");
+  if (repository) {
+    await repository.writeProjectFile(project.id, "guide_outline.md", outline);
+  } else {
+    await writeFile(join(project.folderPath, "guide_outline.md"), outline, "utf8");
+  }
   return outline;
 }
 
@@ -38,12 +42,12 @@ Current source count: ${input.sources?.length ?? 0}
   return guide;
 }
 
-export async function validateGuideInputs(project: RouteProject): Promise<MissingInputs | undefined> {
-  const summary = await readRouteSummary(project);
-  const pack = await readResearchPack(project);
-  const claims = await readClaims(project);
-  const concept = await readConcept(project);
-  const approvals = await readApprovals(project);
+export async function validateGuideInputs(project: RouteProject, repository?: ProjectRepository): Promise<MissingInputs | undefined> {
+  const summary = await readRouteSummary(project, repository);
+  const pack = await readResearchPack(project, repository);
+  const claims = await readClaims(project, repository);
+  const concept = await readConcept(project, repository);
+  const approvals = await readApprovals(project, repository);
   
   const missing: MissingInputItem[] = [];
 
@@ -88,26 +92,34 @@ export async function validateGuideInputs(project: RouteProject): Promise<Missin
   return undefined;
 }
 
-export async function generateGuideV2(project: RouteProject): Promise<string | undefined> {
-  const missingInputs = await validateGuideInputs(project);
+export async function generateGuideV2(project: RouteProject, repository?: ProjectRepository): Promise<string | undefined> {
+  const missingInputs = await validateGuideInputs(project, repository);
 
   if (missingInputs) {
-    await writeFile(join(project.folderPath, "missing_inputs.json"), JSON.stringify(missingInputs, null, 2), "utf8");
+    if (repository) {
+      await repository.saveMissingInputs(project.id, missingInputs);
+    } else {
+      await writeFile(join(project.folderPath, "missing_inputs.json"), JSON.stringify(missingInputs, null, 2), "utf8");
+    }
     console.warn(`Guide generation blocked by missing inputs for project ${project.id}`);
     return undefined;
   }
 
   // Clear missing inputs if fixed
   try {
-    const { unlink } = await import("node:fs/promises");
-    await unlink(join(project.folderPath, "missing_inputs.json"));
+    if (repository) {
+      await repository.saveMissingInputs(project.id, { missing: [] });
+    } else {
+      const { unlink } = await import("node:fs/promises");
+      await unlink(join(project.folderPath, "missing_inputs.json"));
+    }
   } catch {}
 
-  const summary = (await readRouteSummary(project))!;
-  const pack = (await readResearchPack(project))!;
-  const claims = await readClaims(project);
-  const pois = await readPois(project);
-  const concept = await readConcept(project);
+  const summary = (await readRouteSummary(project, repository))!;
+  const pack = (await readResearchPack(project, repository))!;
+  const claims = await readClaims(project, repository);
+  const pois = await readPois(project, repository);
+  const concept = await readConcept(project, repository);
 
   const warnings = summary.warnings ?? [];
   const segments = summary.routeSegments ?? [];
@@ -124,7 +136,12 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
   markUsed(sectionClaims.season, "season_notes");
   markUsed(sectionClaims.practical, "preparation");
   
-  await writeFile(join(project.folderPath, "claims.json"), JSON.stringify(claims, null, 2), "utf8");
+  if (repository) {
+    await repository.saveClaims(project.id, claims);
+  } else {
+    const { writeJsonFile } = await import("../../atlas-core/src/index.js");
+    await writeJsonFile(join(project.folderPath, "claims.json"), claims);
+  }
 
   const quickFacts = [
     `Distance: ${summary.distanceKm} km`,
@@ -172,7 +189,11 @@ export async function generateGuideV2(project: RouteProject): Promise<string | u
 
   const guide = guideBlocks + "\n";
 
-  await writeFile(join(project.folderPath, "guide.md"), guide, "utf8");
+  if (repository) {
+    await repository.writeProjectFile(project.id, "guide.md", guide);
+  } else {
+    await writeFile(join(project.folderPath, "guide.md"), guide, "utf8");
+  }
   return guide;
 }
 
@@ -242,33 +263,45 @@ function reviewSummary(sectionClaims: Record<string, Claim[]>): string {
 }
 
 // Helpers
-async function readRouteSummary(project: RouteProject): Promise<RouteSummary | undefined> {
+async function readRouteSummary(project: RouteProject, repository?: ProjectRepository): Promise<RouteSummary | undefined> {
   try {
+    if (repository) return await repository.loadSummary(project.id);
+    const { readJsonFile } = await import("../../atlas-core/src/index.js");
     return await readJsonFile<RouteSummary>(join(project.folderPath, "route_summary.json"));
   } catch {
     return undefined;
   }
 }
 
-async function readResearchPack(project: RouteProject): Promise<any> {
+async function readResearchPack(project: RouteProject, repository?: ProjectRepository): Promise<any> {
   try {
+    if (repository) {
+      const content = await repository.readProjectFile(project.id, "research_pack.json");
+      return JSON.parse(content);
+    }
+    const { readJsonFile } = await import("../../atlas-core/src/index.js");
     return await readJsonFile<any>(join(project.folderPath, "research_pack.json"));
   } catch {
     return undefined;
   }
 }
 
-async function readClaims(project: RouteProject): Promise<Claim[]> {
+async function readClaims(project: RouteProject, repository?: ProjectRepository): Promise<Claim[]> {
   try {
+    if (repository) return await repository.loadClaims(project.id);
+    const { readJsonFile } = await import("../../atlas-core/src/index.js");
     return await readJsonFile<Claim[]>(join(project.folderPath, "claims.json"));
   } catch {
     return [];
   }
 }
 
-async function readPois(project: RouteProject): Promise<Poi[]> {
+async function readPois(project: RouteProject, repository?: ProjectRepository): Promise<Poi[]> {
   try {
-    const geojson = await readJsonFile<any>(join(project.folderPath, "poi.geojson"));
+    const content = repository 
+      ? await repository.readProjectFile(project.id, "poi.geojson")
+      : await readFile(join(project.folderPath, "poi.geojson"), "utf8");
+    const geojson = JSON.parse(content);
     return geojson.features.map((f: any) => ({
       name: f.properties.name,
       description: f.properties.description
@@ -278,16 +311,19 @@ async function readPois(project: RouteProject): Promise<Poi[]> {
   }
 }
 
-async function readConcept(project: RouteProject): Promise<string | undefined> {
+async function readConcept(project: RouteProject, repository?: ProjectRepository): Promise<string | undefined> {
   try {
+    if (repository) return await repository.readProjectFile(project.id, "route_concept.md");
     return await readFile(join(project.folderPath, "route_concept.md"), "utf8");
   } catch {
     return undefined;
   }
 }
 
-async function readApprovals(project: RouteProject): Promise<Approvals | undefined> {
+async function readApprovals(project: RouteProject, repository?: ProjectRepository): Promise<Approvals | undefined> {
   try {
+    if (repository) return await repository.loadApprovals(project.id);
+    const { readJsonFile } = await import("../../atlas-core/src/index.js");
     return await readJsonFile<Approvals>(join(project.folderPath, "approvals.json"));
   } catch {
     return undefined;

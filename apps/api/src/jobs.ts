@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 export type JobStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed";
@@ -10,6 +10,7 @@ export type AtlasJob<T = unknown> = {
   status: JobStatus;
   progress: number;
   currentStep?: string;
+  waitingForStage?: string;
   logs: AtlasJobLog[];
   createdAt: string;
   updatedAt: string;
@@ -57,15 +58,16 @@ export class JobManager {
 
   private initPersistence(dir: string) {
     try {
-      mkdirSync(dir, { recursive: true });
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
     } catch {}
 
     if (!this.persistFile) return;
 
     try {
-      const fs = require("node:fs");
-      if (fs.existsSync(this.persistFile)) {
-        const content = fs.readFileSync(this.persistFile, "utf8");
+      if (existsSync(this.persistFile)) {
+        const content = readFileSync(this.persistFile, "utf8");
         const persistedJobs: AtlasJob[] = JSON.parse(content);
         for (const job of persistedJobs) {
           if (job.status === "running" || job.status === "queued") {
@@ -75,6 +77,9 @@ export class JobManager {
           }
           job.logs = []; // logs remain exclusively in RAM
           this.jobs.set(job.id, job);
+          
+          // Only maintain locks for jobs that are still valid blocks (waiting for approval)
+          // Finished or failed (including restarted) jobs should not hold locks.
           if (job.projectSlug && job.status === "waiting_for_approval") {
             this.locks.set(job.projectSlug, job.id);
           }
@@ -149,6 +154,7 @@ export class JobManager {
       status: "running",
       approvalData,
       pendingApprovalContext: undefined,
+      waitingForStage: undefined,
       updatedAt: new Date().toISOString()
     });
     this.log(id, { message: "Job resumed after approval.", progress: job.progress });
@@ -188,10 +194,6 @@ export class JobManager {
   }
 
   private async run<T>(job: AtlasJob<T>, task: (update: JobUpdateFn) => Promise<T>): Promise<void> {
-    if (job.status !== "running" && job.status !== "queued") {
-      // If resumed, it's already set to running. If new, it's queued.
-    }
-    
     this.patch(job.id, {
       status: "running",
       startedAt: job.startedAt ?? new Date().toISOString()
@@ -203,6 +205,7 @@ export class JobManager {
           this.patch(job.id, {
             status: "waiting_for_approval",
             pendingApprovalContext: update.waitContext,
+            waitingForStage: update.waitContext.stage,
             progress: update.progress ?? job.progress,
             currentStep: update.currentStep ?? job.currentStep
           });

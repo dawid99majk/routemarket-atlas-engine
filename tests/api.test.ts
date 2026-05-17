@@ -136,7 +136,7 @@ describe("Atlas API", () => {
 
     const providers = await client.listSourceProviders();
     expect(providers.providers.some((provider: any) => provider.id === "mock" && provider.configured)).toBe(true);
-    expect(providers.defaultProvider).toMatch(/mock|brave/);
+    expect(providers.defaultProvider).toMatch(/mock|google/);
 
     const created = await client.createProject({
       topic: "Albania dashboard route",

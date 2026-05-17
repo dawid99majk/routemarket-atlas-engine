@@ -1,37 +1,19 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { type ProjectEvent, type ProjectRepository } from "../../atlas-core/src/index.js";
 
-export type ProjectEvent = {
-  id: string;
-  type: string;
-  message: string;
-  createdAt: string;
-  data?: Record<string, unknown>;
-};
+export type { ProjectEvent };
 
-export async function appendProjectEvent(projectFolder: string, event: Omit<ProjectEvent, "id" | "createdAt">): Promise<ProjectEvent> {
-  const path = eventsPath(projectFolder);
-  const events = await listProjectEvents(projectFolder);
+export async function appendProjectEvent(slug: string, repository: ProjectRepository, event: Omit<ProjectEvent, "id" | "createdAt">): Promise<ProjectEvent> {
+  const events = await repository.loadEvents(slug);
   const saved: ProjectEvent = {
     id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     createdAt: new Date().toISOString(),
     ...event
   };
   events.push(saved);
-  await mkdir(projectFolder, { recursive: true });
-  await writeFile(path, `${JSON.stringify(events, null, 2)}\n`, "utf8");
+  await repository.saveEvents(slug, events);
   return saved;
 }
 
-export async function listProjectEvents(projectFolder: string): Promise<ProjectEvent[]> {
-  try {
-    const raw = await readFile(eventsPath(projectFolder), "utf8");
-    return JSON.parse(raw) as ProjectEvent[];
-  } catch {
-    return [];
-  }
-}
-
-function eventsPath(projectFolder: string): string {
-  return join(projectFolder, "events.json");
+export async function listProjectEvents(slug: string, repository: ProjectRepository): Promise<ProjectEvent[]> {
+  return repository.loadEvents(slug);
 }

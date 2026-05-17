@@ -13,7 +13,10 @@ services:
       ATLAS_API_TOKEN: "change-me"
       ATLAS_LOG_REQUESTS: "true"
       ATLAS_MAX_JOBS: "200"
-      BRAVE_SEARCH_API_KEY: ""
+      GEMINI_API_KEY: ""
+      GEMINI_MODEL: "gemini-2.5-flash"
+      GOOGLE_API_KEY: ""
+      GOOGLE_MAPS_API_KEY: ""
     volumes:
       - atlas-data:/app/data
       - atlas-routes:/app/routes

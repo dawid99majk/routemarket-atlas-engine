@@ -26,7 +26,7 @@ export type ProjectListFilters = {
 };
 
 export type CollectSourcesOptions = {
-  provider?: "auto" | "mock" | "brave";
+  provider?: "auto" | "mock" | "google";
   limit?: number;
 };
 

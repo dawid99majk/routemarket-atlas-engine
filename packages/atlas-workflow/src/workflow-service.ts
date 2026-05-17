@@ -1,11 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  createRouteProject,
-  addInputLink,
-  addInputText,
-  registerExternalInput,
-  listRouteProjects,
   readJsonFile,
   readJsonFileWithSchema,
   RouteProjectSchema,
@@ -13,11 +7,12 @@ import {
   ClaimSchema,
   routesPath,
   updateProjectStatus,
-  FileProjectStorage,
+  FileProjectRepository,
   type RouteProject,
   type Source,
   type Claim,
-  type ProjectStorageAdapter
+  type ProjectRepository,
+  type InputItemType
 } from "../../atlas-core/src/index.js";
 import { z } from "zod";
 import { prepareRouteMarketDraft } from "../../atlas-publisher/src/index.js";
@@ -46,7 +41,7 @@ import { readWorkflowState, writeWorkflowState } from "./workflow-state.js";
 
 export type AtlasWorkflowOptions = {
   rootDir: string;
-  storage?: ProjectStorageAdapter;
+  repository?: ProjectRepository;
 };
 
 export type CreateProjectRequest = {
@@ -93,10 +88,10 @@ export type WorkflowProgress = {
 export type WorkflowProgressCallback = (progress: WorkflowProgress) => void;
 
 export class AtlasWorkflowService {
-  private readonly storage: ProjectStorageAdapter;
+  private readonly repository: ProjectRepository;
 
   constructor(private readonly options: AtlasWorkflowOptions) {
-    this.storage = options.storage ?? new FileProjectStorage(options.rootDir);
+    this.repository = options.repository ?? new FileProjectRepository(options.rootDir);
   }
 
   discover(input: DiscoverRequest) {
@@ -110,14 +105,13 @@ export class AtlasWorkflowService {
   }
 
   async createProject(input: CreateProjectRequest) {
-    const project = await createRouteProject({
-      rootDir: this.options.rootDir,
+    const project = await this.repository.createProject({
       title: input.topic,
       category: input.category,
       region: input.region,
       language: input.language ?? "en"
     });
-    await appendProjectEvent(project.folderPath, {
+    await appendProjectEvent(project.id, this.repository, {
       type: "project.created",
       message: `Project created: ${project.title}`,
       data: { status: project.status }
@@ -126,7 +120,7 @@ export class AtlasWorkflowService {
   }
 
   async listProjects(filters: ProjectListFilters = {}) {
-    const projects = await this.storage.listProjects();
+    const projects = await this.repository.listProjects();
     return filterProjects(projects, filters);
   }
 
@@ -143,13 +137,13 @@ export class AtlasWorkflowService {
   }
 
   getProject(projectSlug: string) {
-    return this.storage.getProject(projectSlug);
+    return this.repository.getProject(projectSlug);
   }
 
   async collectSources(projectSlug: string, input: CollectSourcesRequest = {}) {
-    const project = await this.storage.getProject(projectSlug);
-    const sources = await collectSources({ project, provider: input.provider, limit: input.limit });
-    await appendProjectEvent(project.folderPath, {
+    const project = await this.repository.getProject(projectSlug);
+    const sources = await collectSources({ project, provider: input.provider, limit: input.limit, repository: this.repository });
+    await appendProjectEvent(project.id, this.repository, {
       type: "sources.collected",
       message: `Collected ${sources.length} sources.`,
       data: { sourceCount: sources.length }
@@ -158,9 +152,9 @@ export class AtlasWorkflowService {
   }
 
   async runDeepResearch(projectSlug: string, input: RunDeepResearchRequest = {}) {
-    const project = await this.storage.getProject(projectSlug);
-    const report = await runDeepResearch({ project, sourceLimit: input.sourceLimit });
-    await appendProjectEvent(project.folderPath, {
+    const project = await this.repository.getProject(projectSlug);
+    const report = await runDeepResearch({ project, sourceLimit: input.sourceLimit, repository: this.repository });
+    await appendProjectEvent(project.id, this.repository, {
       type: "research.deep_completed",
       message: `Deep research processed ${report.processedSourceCount} sources.`,
       data: {
@@ -176,7 +170,7 @@ export class AtlasWorkflowService {
 
   async writeBrief(projectSlug: string) {
     const { project, sources } = await this.loadProjectBundle(projectSlug);
-    return generateResearchBrief({ project, sources });
+    return generateResearchBrief({ project, sources, repository: this.repository });
   }
 
   async runMvp2(projectSlug: string) {
@@ -184,9 +178,9 @@ export class AtlasWorkflowService {
   }
 
   async addNoteText(projectSlug: string, input: AddTextInputRequest) {
-    const project = await this.storage.getProject(projectSlug);
-    const item = await addInputText(project.folderPath, { ...input, type: "note" });
-    await appendProjectEvent(project.folderPath, {
+    const project = await this.repository.getProject(projectSlug);
+    const item = await this.addTextInputThroughRepository(project.id, { ...input, type: "note" });
+    await appendProjectEvent(project.id, this.repository, {
       type: "input.note_added",
       message: `Added note input: ${item.originalName}.`,
       data: { item }
@@ -195,9 +189,9 @@ export class AtlasWorkflowService {
   }
 
   async addGpxText(projectSlug: string, input: AddTextInputRequest) {
-    const project = await this.storage.getProject(projectSlug);
-    const item = await addInputText(project.folderPath, { ...input, type: "gpx" });
-    await appendProjectEvent(project.folderPath, {
+    const project = await this.repository.getProject(projectSlug);
+    const item = await this.addTextInputThroughRepository(project.id, { ...input, type: "gpx" });
+    await appendProjectEvent(project.id, this.repository, {
       type: "input.gpx_added",
       message: `Added GPX input: ${item.originalName}.`,
       data: { item }
@@ -206,9 +200,24 @@ export class AtlasWorkflowService {
   }
 
   async addLink(projectSlug: string, input: { url: string; note?: string }) {
-    const project = await this.storage.getProject(projectSlug);
-    const item = await addInputLink(project.folderPath, input.url, input.note);
-    await appendProjectEvent(project.folderPath, {
+    const project = await this.repository.getProject(projectSlug);
+    const manifest = await this.repository.loadInputManifest(project.id);
+    const now = new Date().toISOString();
+    const item = {
+      id: `link_${Date.now()}`,
+      type: "link" as const,
+      path: input.url,
+      originalName: input.url,
+      mimeType: "text/uri-list",
+      sizeBytes: 0,
+      addedAt: now,
+      status: "added" as const,
+      notes: input.note
+    };
+    manifest.items.push(item);
+    manifest.updatedAt = now;
+    await this.repository.saveInputManifest(project.id, manifest);
+    await appendProjectEvent(project.id, this.repository, {
       type: "input.link_added",
       message: `Added link input: ${input.url}.`,
       data: { item }
@@ -217,7 +226,7 @@ export class AtlasWorkflowService {
   }
 
   async registerExternalInput(projectSlug: string, input: {
-    type: import("../../atlas-core/src/index.js").InputItemType;
+    type: InputItemType;
     originalName: string;
     storageUrl?: string;
     storageKey?: string;
@@ -225,9 +234,28 @@ export class AtlasWorkflowService {
     sizeBytes: number;
     note?: string;
   }) {
-    const project = await this.storage.getProject(projectSlug);
-    const item = await registerExternalInput(project.folderPath, input);
-    await appendProjectEvent(project.folderPath, {
+    const project = await this.repository.getProject(projectSlug);
+    if (!input.storageUrl && !input.storageKey) throw new Error("storageUrl or storageKey is required.");
+    const manifest = await this.repository.loadInputManifest(project.id);
+    const now = new Date().toISOString();
+    const fileName = safeInputName(input.originalName);
+    const item = {
+      id: `${input.type}_${Date.now()}`,
+      type: input.type,
+      path: input.storageKey ?? input.storageUrl ?? fileName,
+      originalName: fileName,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      storageUrl: input.storageUrl,
+      storageKey: input.storageKey,
+      addedAt: now,
+      status: externalInputStatus(input.type, fileName, input.mimeType),
+      notes: input.note
+    };
+    manifest.items.push(item);
+    manifest.updatedAt = now;
+    await this.repository.saveInputManifest(project.id, manifest);
+    await appendProjectEvent(project.id, this.repository, {
       type: "input.external_registered",
       message: `Registered external input: ${item.originalName}.`,
       data: { item }
@@ -235,11 +263,49 @@ export class AtlasWorkflowService {
     return { project, item };
   }
 
+  private async addTextInputThroughRepository(projectSlug: string, input: AddTextInputRequest & { type: "note" | "gpx" }) {
+    const fileName = safeInputName(input.fileName);
+    const isGpx = input.type === "gpx";
+    if (isGpx && !fileName.toLowerCase().endsWith(".gpx")) throw new Error("Only .gpx files are allowed.");
+    if (!isGpx && !(fileName.toLowerCase().endsWith(".md") || fileName.toLowerCase().endsWith(".txt"))) {
+      throw new Error("Only .md and .txt files are allowed.");
+    }
+
+    const maxSize = isGpx ? 10_000_000 : 2_000_000;
+    const sizeBytes = Buffer.byteLength(input.content, "utf8");
+    if (sizeBytes > maxSize) throw new Error(`Input is too large. Max size is ${maxSize} bytes.`);
+
+    const manifest = await this.repository.loadInputManifest(projectSlug);
+    const now = new Date().toISOString();
+    const targetPath = `input/${isGpx ? "gpx" : "notes"}/${fileName}`;
+    await this.repository.writeProjectFile(projectSlug, targetPath, input.content);
+
+    if (isGpx) {
+      await this.repository.writeProjectFile(projectSlug, "route.gpx", input.content);
+    }
+
+    const item = {
+      id: `${input.type}_${Date.now()}`,
+      type: input.type,
+      path: targetPath,
+      originalName: fileName,
+      mimeType: mimeTypeForFile(fileName),
+      sizeBytes,
+      addedAt: now,
+      status: "added" as const,
+      notes: input.note
+    };
+    manifest.items.push(item);
+    manifest.updatedAt = now;
+    await this.repository.saveInputManifest(projectSlug, manifest);
+    return item;
+  }
+
   async buildResearchPack(projectSlug: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     const { buildResearchPack } = await import("../../atlas-research/src/index.js");
-    const researchPack = await buildResearchPack(project);
-    await appendProjectEvent(project.folderPath, {
+    const researchPack = await buildResearchPack(project, this.repository);
+    await appendProjectEvent(project.id, this.repository, {
       type: "research.pack_built",
       message: `Built research pack with ${researchPack.materials.length} materials.`,
       data: { materialCount: researchPack.materials.length }
@@ -248,10 +314,10 @@ export class AtlasWorkflowService {
   }
 
   async analyzeGpx(projectSlug: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     const { analyzeGpx } = await import("../../atlas-research/src/index.js");
-    const routeSummary = await analyzeGpx(project);
-    await appendProjectEvent(project.folderPath, {
+    const routeSummary = await analyzeGpx(project, this.repository);
+    await appendProjectEvent(project.id, this.repository, {
       type: "gpx.analyzed",
       message: `Analyzed GPX route: ${routeSummary.distanceKm ?? 0} km.`,
       data: { routeSummary }
@@ -263,7 +329,7 @@ export class AtlasWorkflowService {
     let { project, sources } = await this.loadProjectBundle(projectSlug);
     const progress = async (message: string, value: number, currentStep: string, waitContext?: any) => {
       onProgress?.({ message, progress: value, currentStep, waitContext } as any);
-      await appendProjectEvent(project.folderPath, {
+      await appendProjectEvent(project.id, this.repository, {
         type: `workflow.${currentStep}`,
         message,
         data: { progress: value, paused: !!waitContext }
@@ -272,13 +338,13 @@ export class AtlasWorkflowService {
         currentStep,
         waitingApprovalStage: waitContext?.stage,
         nextStep: waitContext?.stage ? nextStepAfterStage(waitContext.stage) : undefined
-      });
+      }, this.repository);
     };
 
     const isApproved = async (stage: string) => {
       if (options.autoApprove && process.env.NODE_ENV !== "production") return true;
       try {
-        const approvals = await this.storage.loadApprovals(projectSlug);
+        const approvals = await this.repository.loadApprovals(projectSlug);
         return approvals.approvals.some((a: any) => a.stage === stage && a.decision === "approved");
       } catch {
         return false;
@@ -291,7 +357,7 @@ export class AtlasWorkflowService {
         run: async () => {
           await progress("Processing input materials.", 5, "input");
           const { buildResearchPack } = await import("../../atlas-research/src/index.js");
-          await buildResearchPack(project);
+          await buildResearchPack(project, this.repository);
         }
       },
       {
@@ -300,7 +366,7 @@ export class AtlasWorkflowService {
           await progress("Analyzing GPX.", 10, "gpx");
           const { analyzeGpx } = await import("../../atlas-research/src/index.js");
           try {
-            await analyzeGpx(project);
+            await analyzeGpx(project, this.repository);
           } catch (err) {
             console.warn("GPX analysis failed or file missing, continuing...");
           }
@@ -318,7 +384,7 @@ export class AtlasWorkflowService {
         id: "claims",
         run: async () => {
           await progress("Generating claims.", 25, "claims");
-          await generateClaims(project);
+          await generateClaims(project, this.repository);
           
           if (!await isApproved("claims_approval")) {
             await progress("Claims generated. Waiting for approval.", 30, "claims_approval", {
@@ -333,7 +399,7 @@ export class AtlasWorkflowService {
         id: "pois",
         run: async () => {
           await progress("Extracting POI.", 40, "pois");
-          await extractPois(project);
+          await extractPois(project, this.repository);
           
           if (!await isApproved("poi_approval")) {
             await progress("POI extracted. Waiting for verification.", 45, "poi_approval", {
@@ -348,7 +414,7 @@ export class AtlasWorkflowService {
         id: "concept",
         run: async () => {
           await progress("Writing route concept.", 55, "concept");
-          await generateRouteConcept({ project, sources });
+          await generateRouteConcept({ project, sources, repository: this.repository });
           
           if (!await isApproved("concept_approval")) {
             await progress("Concept generated. Waiting for approval.", 60, "concept_approval", {
@@ -364,7 +430,7 @@ export class AtlasWorkflowService {
         run: async () => {
           await progress("Generating guide outline.", 70, "guide_outline");
           const { writeGuideOutline } = await import("../../atlas-writer/src/index.js");
-          await writeGuideOutline(project);
+          await writeGuideOutline(project, this.repository);
           
           if (!await isApproved("guide_outline_approval")) {
             await progress("Outline generated. Waiting for approval.", 75, "guide_outline_approval", {
@@ -380,7 +446,7 @@ export class AtlasWorkflowService {
         run: async () => {
           await progress("Writing final guide.", 80, "guide");
           const { generateGuideV2 } = await import("../../atlas-writer/src/index.js");
-          await generateGuideV2(project);
+          await generateGuideV2(project, this.repository);
           
           if (!await isApproved("guide_final_approval")) {
             await progress("Guide written. Waiting for final approval.", 85, "guide_final_approval", {
@@ -395,15 +461,15 @@ export class AtlasWorkflowService {
         id: "finalize",
         run: async () => {
           await progress("Finalizing artifacts.", 90, "finalize");
-          await generateRouteTips(project);
-          await generateRecommendations(project);
-          await prepareMediaPack(project);
-          await generateQualityReport({ project, sources, gpxValid: true, geojsonValid: true });
-          await writeReviewChecklist(project);
+          await generateRouteTips(project, this.repository);
+          await generateRecommendations(project, this.repository);
+          await prepareMediaPack(project, this.repository);
+          await generateQualityReport({ project, sources, gpxValid: true, geojsonValid: true, repository: this.repository });
+          await writeReviewChecklist(project, this.repository);
           await prepareRouteMarketDraft(project);
           
           project = await updateProjectStatus(project, "draft_generated");
-          await appendProjectEvent(project.folderPath, {
+          await appendProjectEvent(project.id, this.repository, {
             type: "project.status_changed",
             message: "Project status changed to draft_generated.",
             data: { status: "draft_generated" }
@@ -417,8 +483,7 @@ export class AtlasWorkflowService {
       // Find the first step that isn't approved or missing artifacts
       for (const step of steps) {
         if (step.id === "input") {
-          const { exists } = await import("../../atlas-core/src/index.js");
-          if (!await exists(join(project.folderPath, "research_pack.json"))) {
+          if (!await this.repository.exists(project.id, "research_pack.json")) {
             currentStepId = "input";
             break;
           }
@@ -440,13 +505,13 @@ export class AtlasWorkflowService {
     for (let i = startIndex; i < steps.length; i++) {
       const result = await steps[i].run() as any;
       if (result?.pause) return { project, status: "paused", step: steps[i].id, stage: result.stage };
-      const state = await readWorkflowState(project);
+      const state = await readWorkflowState(project, this.repository);
       await writeWorkflowState(project, {
         completedSteps: [...new Set([...state.completedSteps, steps[i].id])],
         currentStep: steps[i].id,
         waitingApprovalStage: undefined,
         nextStep: steps[i + 1]?.id
-      });
+      }, this.repository);
     }
 
     onProgress?.({ message: "Workflow completed.", progress: 100, currentStep: "completed" });
@@ -455,7 +520,7 @@ export class AtlasWorkflowService {
 
 
   async preparePublish(projectSlug: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     const { checkQualityGates, QualityGateError } = await import("./quality-gates.js");
     const issues = await checkQualityGates(project);
     if (issues.length > 0) {
@@ -465,7 +530,7 @@ export class AtlasWorkflowService {
   }
 
   async listArtifacts(projectSlug: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     return {
       project,
       artifacts: await listProjectArtifacts(project.folderPath)
@@ -473,16 +538,16 @@ export class AtlasWorkflowService {
   }
 
   async getProjectBundle(projectSlug: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     const [artifacts, events] = await Promise.all([
       listProjectArtifacts(project.folderPath),
-      listProjectEvents(project.folderPath)
+      listProjectEvents(project.id, this.repository)
     ]);
     return { project, artifacts, events };
   }
 
   async assessReadiness(projectSlug: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     const [artifacts, sources, claims] = await Promise.all([
       listProjectArtifacts(project.folderPath),
       this.loadSources(projectSlug),
@@ -498,7 +563,7 @@ export class AtlasWorkflowService {
   }
 
   async getReview(projectSlug: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     const [artifacts, sources, claims] = await Promise.all([
       listProjectArtifacts(project.folderPath),
       this.loadSources(projectSlug),
@@ -506,14 +571,14 @@ export class AtlasWorkflowService {
     ]);
     const { checkQualityGates } = await import("./quality-gates.js");
     const qualityIssues = await checkQualityGates(project);
-    return buildProjectReviewBundle({ project, storage: this.storage, artifacts, sources, claims, qualityIssues });
+    return buildProjectReviewBundle({ project, repository: this.repository, artifacts, sources, claims, qualityIssues });
   }
 
   async submitReviewDecision(projectSlug: string, input: SubmitReviewDecisionRequest) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     return saveProjectReviewDecision({
       project,
-      storage: this.storage,
+      repository: this.repository,
       decision: input.decision,
       reviewer: input.reviewer,
       notes: input.notes
@@ -521,16 +586,16 @@ export class AtlasWorkflowService {
   }
 
   async approveStage(projectSlug: string, stage: string, decision: import("./review.js").ApprovalDecision, notes?: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     const { saveProjectApprovalDecision } = await import("./review.js");
     const result = await saveProjectApprovalDecision({
       project,
-      storage: this.storage,
+      repository: this.repository,
       stage,
       decision,
       notes
     });
-    await writeWorkflowState(project, { waitingApprovalStage: undefined, nextStep: nextStepAfterStage(stage) });
+    await writeWorkflowState(project, { waitingApprovalStage: undefined, nextStep: nextStepAfterStage(stage) }, this.repository);
     return result;
   }
 
@@ -541,7 +606,7 @@ export class AtlasWorkflowService {
 
   async archiveProject(projectSlug: string, reason?: string): Promise<RouteProject> {
     const updated = await this.setProjectStatus(projectSlug, "archived");
-    await appendProjectEvent(updated.folderPath, {
+    await appendProjectEvent(updated.id, this.repository, {
       type: "project.archived",
       message: reason ? `Project archived: ${reason}` : "Project archived.",
       data: { reason }
@@ -550,10 +615,10 @@ export class AtlasWorkflowService {
   }
 
   async listEvents(projectSlug: string) {
-    const project = await this.storage.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     return {
       project,
-      events: await listProjectEvents(project.folderPath)
+      events: await listProjectEvents(project.id, this.repository)
     };
   }
 
@@ -561,7 +626,7 @@ export class AtlasWorkflowService {
     if (!allowedProjectFiles.has(file) || file.includes("..") || file.startsWith("/") || file.startsWith("\\")) {
       throw new Error("Invalid file path.");
     }
-    return this.storage.readProjectFile(projectSlug, file);
+    return this.repository.readProjectFile(projectSlug, file);
   }
 
   async writeProjectFile(projectSlug: string, file: string, content: string): Promise<{ path: string; content: string }> {
@@ -569,8 +634,8 @@ export class AtlasWorkflowService {
     if (!writableProjectFiles.has(file) || file.includes("..") || file.startsWith("/") || file.startsWith("\\")) {
       throw new Error("File is not writable through Atlas API.");
     }
-    await this.storage.writeProjectFile(projectSlug, file, content);
-    await appendProjectEvent(project.folderPath, {
+    await this.repository.writeProjectFile(projectSlug, file, content);
+    await appendProjectEvent(project.id, this.repository, {
       type: "project.file_updated",
       message: `Updated ${file}.`,
       data: { path: file }
@@ -581,8 +646,8 @@ export class AtlasWorkflowService {
   async setProjectStatus(projectSlug: string, status: import("../../atlas-core/src/index.js").ProjectStatus): Promise<RouteProject> {
     const project = await this.getProject(projectSlug);
     const updated = await updateProjectStatus(project, status);
-    await this.storage.saveProject(projectSlug, updated);
-    await appendProjectEvent(project.folderPath, {
+    await this.repository.saveProject(updated);
+    await appendProjectEvent(project.id, this.repository, {
       type: "project.status_changed",
       message: `Project status changed to ${status}.`,
       data: { status }
@@ -591,18 +656,50 @@ export class AtlasWorkflowService {
   }
 
   private async loadProjectBundle(projectSlug: string): Promise<{ project: RouteProject; sources: Source[] }> {
-    const project = await this.getProject(projectSlug);
+    const project = await this.repository.getProject(projectSlug);
     const sources = await this.loadSources(projectSlug);
     return { project, sources };
   }
 
   private loadSources(projectSlug: string): Promise<Source[]> {
-    return this.storage.loadSources(projectSlug);
+    return this.repository.loadSources(projectSlug);
   }
 
   private loadClaims(projectSlug: string): Promise<Claim[]> {
-    return this.storage.loadClaims(projectSlug);
+    return this.repository.loadClaims(projectSlug);
   }
+}
+
+
+function safeInputName(fileName: string): string {
+  const base = fileName.split(/[\\/]/).pop()?.replace(/[^a-zA-Z0-9._-]/g, "_") ?? "";
+  if (!base || base === "." || base === ".." || base.startsWith(".") || base.includes("..")) {
+    throw new Error("Invalid filename.");
+  }
+  if (base !== fileName || fileName.includes("/") || fileName.includes("\\")) {
+    throw new Error("Invalid filename.");
+  }
+  return base;
+}
+
+function mimeTypeForFile(fileName: string): string {
+  const lowered = fileName.toLowerCase();
+  if (lowered.endsWith(".md")) return "text/markdown";
+  if (lowered.endsWith(".txt")) return "text/plain";
+  if (lowered.endsWith(".gpx")) return "application/gpx+xml";
+  if (lowered.endsWith(".jpg") || lowered.endsWith(".jpeg")) return "image/jpeg";
+  if (lowered.endsWith(".png")) return "image/png";
+  if (lowered.endsWith(".pdf")) return "application/pdf";
+  return "application/octet-stream";
+}
+
+function externalInputStatus(type: InputItemType, fileName: string, mimeType: string) {
+  const lowered = fileName.toLowerCase();
+  if (type === "note" && (lowered.endsWith(".md") || lowered.endsWith(".txt"))) return "needs_parser" as const;
+  if (type === "gpx" && lowered.endsWith(".gpx")) return "needs_parser" as const;
+  if (type === "photo" && mimeType.startsWith("image/")) return "needs_review" as const;
+  if (type === "document" && (lowered.endsWith(".pdf") || lowered.endsWith(".docx"))) return "needs_parser" as const;
+  return "unsupported" as const;
 }
 
 const allowedProjectFiles = new Set([

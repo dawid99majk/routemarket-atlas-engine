@@ -1,7 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Claim, RouteProject, Source } from "../../../atlas-core/src/index.js";
-import { readJsonFile, writeJsonFile } from "../../../atlas-core/src/index.js";
+import type { Claim, RouteProject, Source, ProjectRepository } from "../../../atlas-core/src/index.js";
 import { createDeepResearchProvider } from "../providers/provider-factory.js";
 import type { DeepResearchExtractionResult, DeepResearchProvider, PoiCandidate } from "../providers/interfaces.js";
 import { GooglePlacesProvider } from "../providers/google-places-provider.js";
@@ -31,6 +30,7 @@ export type RunDeepResearchInput = {
   project: RouteProject;
   sourceLimit?: number;
   provider?: DeepResearchProvider;
+  repository?: ProjectRepository;
 };
 
 type GeoJsonFeature = {
@@ -50,26 +50,47 @@ type PoiFeatureCollection = {
 export async function runDeepResearch(input: RunDeepResearchInput): Promise<DeepResearchReport> {
   const provider = input.provider ?? createDeepResearchProvider().provider;
   const sourceLimit = Math.max(1, Math.min(input.sourceLimit ?? 3, 20));
-  const sourcesPath = join(input.project.folderPath, "sources.json");
-  const claimsPath = join(input.project.folderPath, "claims.json");
-  const poiPath = join(input.project.folderPath, "poi.geojson");
-  const deepDir = join(input.project.folderPath, "research", "deep");
+  const repository = input.repository;
 
-  const sources = await readJsonFile<Source[]>(sourcesPath);
-  const existingClaims = await readOptionalJson<Claim[]>(claimsPath, []);
-  const geojson = await readOptionalJson<PoiFeatureCollection>(poiPath, { type: "FeatureCollection", features: [] });
+  const sources = repository 
+    ? await repository.loadSources(input.project.id)
+    : await readJsonFileFallback<Source[]>(join(input.project.folderPath, "sources.json"));
+
+  const existingClaims = repository
+    ? await repository.loadClaims(input.project.id)
+    : await readOptionalJson<Claim[]>(join(input.project.folderPath, "claims.json"), []);
+
+  let geojson: PoiFeatureCollection;
+  if (repository) {
+    try {
+      const content = await repository.readProjectFile(input.project.id, "poi.geojson");
+      geojson = JSON.parse(content);
+    } catch {
+      geojson = { type: "FeatureCollection", features: [] };
+    }
+  } else {
+    geojson = await readOptionalJson<PoiFeatureCollection>(join(input.project.folderPath, "poi.geojson"), { type: "FeatureCollection", features: [] });
+  }
+
   const selectedSources = sources.filter((source) => source.deepResearchStatus !== "processed").slice(0, sourceLimit);
   const runs: DeepResearchRun[] = [];
   const addedClaims: Claim[] = [];
   let mappedPoiCount = 0;
 
-  await mkdir(deepDir, { recursive: true });
+  if (!repository) {
+    await mkdir(join(input.project.folderPath, "research", "deep"), { recursive: true });
+  }
 
   for (const source of selectedSources) {
     try {
       const result = await provider.scrapeAndExtract(source.url, input.project.title);
       const rawContentPath = `research/deep/${source.id}.txt`;
-      await writeFile(join(input.project.folderPath, rawContentPath), result.extractedText, "utf8");
+      
+      if (repository) {
+        await repository.writeProjectFile(input.project.id, rawContentPath, result.extractedText);
+      } else {
+        await writeFile(join(input.project.folderPath, rawContentPath), result.extractedText, "utf8");
+      }
 
       source.rawContentPath = rawContentPath;
       source.deepResearchStatus = "processed";
@@ -111,10 +132,18 @@ export async function runDeepResearch(input: RunDeepResearchInput): Promise<Deep
     runs
   };
 
-  await writeJsonFile(sourcesPath, sources);
-  await writeJsonFile(claimsPath, finalClaims);
-  await writeJsonFile(poiPath, geojson);
-  await writeJsonFile(join(input.project.folderPath, "deep_research.json"), report);
+  if (repository) {
+    await repository.saveSources(input.project.id, sources);
+    await repository.saveClaims(input.project.id, finalClaims);
+    await repository.writeProjectFile(input.project.id, "poi.geojson", JSON.stringify(geojson, null, 2));
+    await repository.saveArtifact(input.project.id, "deep_research", report);
+  } else {
+    const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+    await writeJsonFile(join(input.project.folderPath, "sources.json"), sources);
+    await writeJsonFile(join(input.project.folderPath, "claims.json"), finalClaims);
+    await writeJsonFile(join(input.project.folderPath, "poi.geojson"), geojson);
+    await writeJsonFile(join(input.project.folderPath, "deep_research.json"), report);
+  }
 
   return report;
 }
@@ -142,10 +171,16 @@ function consolidateClaims(existing: Claim[], newClaims: Claim[]): Claim[] {
 
 async function readOptionalJson<T>(path: string, fallback: T): Promise<T> {
   try {
+    const { readJsonFile } = await import("../../../atlas-core/src/index.js");
     return await readJsonFile<T>(path);
   } catch {
     return fallback;
   }
+}
+
+async function readJsonFileFallback<T>(path: string): Promise<T> {
+  const { readJsonFile } = await import("../../../atlas-core/src/index.js");
+  return readJsonFile<T>(path);
 }
 
 function mapExtractedClaims(

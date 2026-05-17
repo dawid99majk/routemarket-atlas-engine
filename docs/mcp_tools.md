@@ -26,7 +26,7 @@ Registers metadata for a file stored outside Atlas. It does not fetch private UR
 
 ### collect_sources
 
-Collects provider sources with the mock/Brave provider interface.
+Collects provider sources with the mock/Google provider interface.
 
 ### build_research_pack
 

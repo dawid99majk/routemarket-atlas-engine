@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { AtlasWorkflowService } from "../../../packages/atlas-workflow/src/index.js";
+import { FileProjectRepository, PostgresProjectRepository } from "../../../packages/atlas-core/src/index.js";
 import { badRequest, HttpError, notFound, unauthorized } from "./errors.js";
 import { JobManager } from "./jobs.js";
 import {
@@ -54,13 +55,19 @@ type Route = {
 };
 
 function validateSlug(slug: string) {
-  if (slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
-    throw badRequest("Invalid slug provided.");
+  // Strict alphanumeric slug validation to prevent path traversal
+  if (!/^[a-z0-9-]+$/.test(slug)) {
+    throw badRequest(`Invalid slug provided: "${slug}". Only lowercase letters, numbers, and dashes are allowed.`);
   }
 }
 
 export function createAtlasApiServer(options: AtlasApiOptions): Server {
-  const service = new AtlasWorkflowService({ rootDir: options.rootDir });
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const repository = (supabaseUrl && supabaseKey)
+    ? new PostgresProjectRepository(supabaseUrl, supabaseKey, options.rootDir)
+    : new FileProjectRepository(options.rootDir);
+  const service = new AtlasWorkflowService({ rootDir: options.rootDir, repository });
   const jobs = new JobManager({ maxJobs: options.maxJobs, jobsDir: options.jobsDir });
   const corsOrigin = options.corsOrigin ?? "*";
   const apiToken = options.apiToken;
@@ -153,11 +160,11 @@ function createRoutes(): Route[] {
       return { sources: await service.collectSources(params.slug, body) };
     }),
     route("POST", "/projects/:slug/inputs/notes", async ({ req, params, service }) => {
-      const body = AddNoteBodySchema.parse(await readJson(req, 1_000_000));
+      const body = AddNoteBodySchema.parse(await readJson(req, 2_500_000)); // 2.5MB raw buffer limit for 2MB content string
       return service.addNoteText(params.slug, body);
     }),
     route("POST", "/projects/:slug/inputs/gpx", async ({ req, params, service }) => {
-      const body = AddGpxBodySchema.parse(await readJson(req, 10_000_000));
+      const body = AddGpxBodySchema.parse(await readJson(req, 11_000_000)); // 11MB raw buffer limit for 10MB content string
       return service.addGpxText(params.slug, body);
     }),
     route("POST", "/projects/:slug/inputs/links", async ({ req, params, service }) => {
@@ -314,8 +321,7 @@ function setCorsHeaders(res: ServerResponse, corsOrigin: string, reqOrigin?: str
 
 function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(`${JSON.stringify(body, null, 2)}
-`);
+  res.end(`${JSON.stringify(body, null, 2)}\n`);
 }
 
 import { ZodError } from "zod";

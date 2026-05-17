@@ -1,8 +1,26 @@
 import type { RouteProject, Source, Claim, RouteSummary } from "../index.js";
+import type { InputManifest, InputItem } from "../models/input-manifest.js";
 
-export interface ProjectStorageAdapter {
+export type CreateProjectInput = {
+  title: string;
+  category?: string;
+  region?: string;
+  language?: string;
+  topicId?: string;
+};
+
+export type ProjectEvent = {
+  id: string;
+  type: string;
+  message: string;
+  createdAt: string;
+  data?: Record<string, unknown>;
+};
+
+export interface ProjectRepository {
+  createProject(input: CreateProjectInput): Promise<RouteProject>;
   getProject(slug: string): Promise<RouteProject>;
-  saveProject(slug: string, project: RouteProject): Promise<void>;
+  saveProject(project: RouteProject): Promise<void>;
   listProjects(): Promise<RouteProject[]>;
   
   loadSources(slug: string): Promise<Source[]>;
@@ -26,12 +44,18 @@ export interface ProjectStorageAdapter {
   loadReviewDecision(slug: string): Promise<any>;
   saveReviewDecision(slug: string, decision: any): Promise<void>;
   
+  loadEvents(slug: string): Promise<ProjectEvent[]>;
+  saveEvents(slug: string, events: ProjectEvent[]): Promise<void>;
+
+  loadInputManifest(slug: string): Promise<InputManifest>;
+  saveInputManifest(slug: string, manifest: InputManifest): Promise<void>;
+  
   readProjectFile(slug: string, file: string): Promise<string>;
   writeProjectFile(slug: string, file: string, content: string): Promise<void>;
   
   exists(slug: string, file: string): Promise<boolean>;
   
-  // For file-based logic that still needs paths (e.g. GPX analysis)
-  // In SQL implementation, this might return a virtual path or we might need to change how we handle files
+  saveArtifact(slug: string, type: string, data: any): Promise<void>;
+
   getProjectPath(slug: string): string;
 }

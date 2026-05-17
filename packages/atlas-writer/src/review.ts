@@ -1,8 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RouteProject } from "../../atlas-core/src/index.js";
+import type { RouteProject, ProjectRepository } from "../../atlas-core/src/index.js";
 
-export async function writeReviewChecklist(project: RouteProject): Promise<string> {
+export async function writeReviewChecklist(project: RouteProject, repository?: ProjectRepository): Promise<string> {
   const { checkQualityGates } = await import("../../atlas-workflow/src/quality-gates.js");
   const issues = await checkQualityGates(project);
   
@@ -48,6 +48,10 @@ export async function writeReviewChecklist(project: RouteProject): Promise<strin
 - [ ] Human approved before publish
 `;
 
-  await writeFile(join(project.folderPath, "review_checklist.md"), checklist, "utf8");
+  if (repository) {
+    await repository.writeProjectFile(project.id, "review_checklist.md", checklist);
+  } else {
+    await writeFile(join(project.folderPath, "review_checklist.md"), checklist, "utf8");
+  }
   return checklist;
 }

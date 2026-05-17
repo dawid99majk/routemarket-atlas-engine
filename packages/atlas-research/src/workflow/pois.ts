@@ -1,34 +1,42 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { 
-  readJsonFile, 
-  writeJsonFile, 
   type Poi, 
   type RouteProject, 
-  type ResearchPack 
+  type ResearchPack,
+  type ProjectRepository
 } from "../../../atlas-core/src/index.js";
 
-export async function extractPois(project: RouteProject): Promise<Poi[]> {
+export async function extractPois(project: RouteProject, repository?: ProjectRepository): Promise<Poi[]> {
   const now = new Date().toISOString();
   const candidates: Poi[] = [];
 
   // 1. Extract from GPX waypoints
-  const gpxPois = await extractFromGpx(project);
+  const gpxPois = await extractFromGpx(project, repository);
   candidates.push(...gpxPois);
 
   // 2. Extract from Deep Research / Research Pack
-  const researchPois = await extractFromResearch(project);
+  const researchPois = await extractFromResearch(project, repository);
   candidates.push(...researchPois);
 
   // 3. De-duplicate by name and coordinates
   const uniquePois = deduplicatePois(candidates);
 
   // 4. Save candidates
-  await writeJsonFile(join(project.folderPath, "poi_candidates.json"), {
-    projectId: project.id,
-    updatedAt: now,
-    pois: uniquePois
-  });
+  if (repository) {
+    await repository.saveArtifact(project.id, "poi_candidates", {
+      projectId: project.id,
+      updatedAt: now,
+      pois: uniquePois
+    });
+  } else {
+    const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+    await writeJsonFile(join(project.folderPath, "poi_candidates.json"), {
+      projectId: project.id,
+      updatedAt: now,
+      pois: uniquePois
+    });
+  }
 
   // 5. Save to GeoJSON (only those with coordinates and not rejected)
   const geojson = {
@@ -55,15 +63,21 @@ export async function extractPois(project: RouteProject): Promise<Poi[]> {
       }))
   };
 
-  await writeFile(join(project.folderPath, "poi.geojson"), `${JSON.stringify(geojson, null, 2)}\n`, "utf8");
+  if (repository) {
+    await repository.writeProjectFile(project.id, "poi.geojson", `${JSON.stringify(geojson, null, 2)}\n`);
+  } else {
+    await writeFile(join(project.folderPath, "poi.geojson"), `${JSON.stringify(geojson, null, 2)}\n`, "utf8");
+  }
   
   return uniquePois;
 }
 
-async function extractFromGpx(project: RouteProject): Promise<Poi[]> {
-  const gpxPath = join(project.folderPath, "route.gpx");
+async function extractFromGpx(project: RouteProject, repository?: ProjectRepository): Promise<Poi[]> {
   try {
-    const xml = await readFile(gpxPath, "utf8");
+    const xml = repository 
+      ? await repository.readProjectFile(project.id, "route.gpx")
+      : await readFile(join(project.folderPath, "route.gpx"), "utf8");
+
     const wptRegex = /<wpt\s+lat="([^"]+)"\s+lon="([^"]+)"[^>]*>(.*?)<\/wpt>/gs;
     const nameRegex = /<name>([^<]+)<\/name>/;
     const descRegex = /<desc>([^<]+)<\/desc>/;
@@ -97,16 +111,20 @@ async function extractFromGpx(project: RouteProject): Promise<Poi[]> {
   }
 }
 
-async function extractFromResearch(project: RouteProject): Promise<Poi[]> {
+async function extractFromResearch(project: RouteProject, repository?: ProjectRepository): Promise<Poi[]> {
   const pois: Poi[] = [];
   try {
-    const pack = await readJsonFile<ResearchPack>(join(project.folderPath, "research_pack.json"));
+    const pack = repository
+      ? await repository.readProjectFile(project.id, "research_pack.json").then(c => JSON.parse(c) as ResearchPack)
+      : await readJsonFileFallback<ResearchPack>(join(project.folderPath, "research_pack.json"));
     // Placeholder: normally we'd LLM-extract POIs from content.
-    // For now, if there's deep research with POIs, we'd find them there.
   } catch {}
 
   try {
-    const deep = await readJsonFile<any>(join(project.folderPath, "deep_research.json"));
+    const deep = repository
+      ? await repository.readProjectFile(project.id, "deep_research.json").then(c => JSON.parse(c) as any)
+      : await readJsonFileFallback<any>(join(project.folderPath, "deep_research.json"));
+
     if (deep && Array.isArray(deep.pois)) {
       deep.pois.forEach((p: any, index: number) => {
         pois.push({
@@ -156,4 +174,9 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+}
+
+async function readJsonFileFallback<T>(path: string): Promise<T> {
+  const { readJsonFile } = await import("../../../atlas-core/src/index.js");
+  return readJsonFile<T>(path);
 }

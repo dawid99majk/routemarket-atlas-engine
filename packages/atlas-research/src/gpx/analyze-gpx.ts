@@ -1,11 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { 
-  readJsonFile, 
-  writeJsonFile, 
   type RouteProject, 
   type RouteSummary,
-  type MissingInputs
+  type MissingInputs,
+  type ProjectRepository
 } from "../../../atlas-core/src/index.js";
 
 type GpxPoint = {
@@ -25,31 +24,37 @@ type RouteSegment = {
   estimatedTimeH?: number;
 };
 
-export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
+export async function analyzeGpx(project: RouteProject, repository?: ProjectRepository): Promise<RouteSummary> {
   const now = new Date().toISOString();
-  // We check both the main project folder and the input/gpx folder
-  let gpxPath = join(project.folderPath, "route.gpx");
   
-  // Try to find the first GPX in input/gpx if the main one doesn't exist
-  if (!(await fileExists(gpxPath))) {
-    const inputGpxDir = join(project.folderPath, "input", "gpx");
+  let gpxContent: string;
+  if (repository) {
     try {
-      const { loadInputManifest } = await import("../../../atlas-core/src/index.js");
-      const manifest = await loadInputManifest(project.folderPath);
+      gpxContent = await repository.readProjectFile(project.id, "route.gpx");
+    } catch {
+      // Try to find in manifest if not at root
+      const manifest = await repository.loadInputManifest(project.id);
       const gpxItem = manifest.items.find(i => i.type === "gpx");
       if (gpxItem) {
-        gpxPath = join(project.folderPath, gpxItem.path);
+        gpxContent = await repository.readProjectFile(project.id, gpxItem.path);
+      } else {
+        throw new Error(`No GPX file found for project: ${project.id}`);
       }
-    } catch {
-      // Ignore
     }
+  } else {
+    let gpxPath = join(project.folderPath, "route.gpx");
+    if (!(await fileExistsFallback(gpxPath))) {
+      try {
+        const { loadInputManifest } = await import("../../../atlas-core/src/index.js");
+        const manifest = await loadInputManifest(project.folderPath);
+        const gpxItem = manifest.items.find(i => i.type === "gpx");
+        if (gpxItem) gpxPath = join(project.folderPath, gpxItem.path);
+      } catch {}
+    }
+    if (!(await fileExistsFallback(gpxPath))) throw new Error(`No GPX file found for project: ${project.id}`);
+    gpxContent = await readFile(gpxPath, "utf8");
   }
 
-  if (!(await fileExists(gpxPath))) {
-    throw new Error(`No GPX file found for project: ${project.id}`);
-  }
-
-  const gpxContent = await readFile(gpxPath, "utf8");
   const parsed = parseGpxPoints(gpxContent);
   const points = parsed.points;
   const warnings: RouteWarning[] = [...parsed.warnings];
@@ -72,7 +77,12 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
         requiredFor: "guide_final"
       }]
     };
-    await writeJsonFile(join(project.folderPath, "missing_inputs.json"), missing);
+    if (repository) {
+      await repository.saveMissingInputs(project.id, missing);
+    } else {
+      const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+      await writeJsonFile(join(project.folderPath, "missing_inputs.json"), missing);
+    }
     throw new Error(`GPX too short: ${stats.distanceKm.toFixed(2)} km`);
   }
 
@@ -96,25 +106,20 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
     updatedAt: now
   };
 
-  await writeJsonFile(join(project.folderPath, "route_summary.json"), summary);
-  
-  // Save elevation profile
-  await writeJsonFile(join(project.folderPath, "elevation_profile.json"), {
-    projectId: project.id,
-    points: stats.elevationProfile
-  });
-
-  await writeJsonFile(join(project.folderPath, "route_warnings.json"), {
-    projectId: project.id,
-    warnings,
-    updatedAt: now
-  });
-  await writeJsonFile(join(project.folderPath, "route_segments.json"), {
-    projectId: project.id,
-    segments: stats.routeSegments,
-    updatedAt: now
-  });
-  await writeJsonFile(join(project.folderPath, "route_segments.geojson"), buildSegmentsGeoJson(project.id, stats.segmentLines, points));
+  if (repository) {
+    await repository.saveSummary(project.id, summary);
+    await repository.saveArtifact(project.id, "elevation_profile", { projectId: project.id, points: stats.elevationProfile });
+    await repository.saveArtifact(project.id, "route_warnings", { projectId: project.id, warnings, updatedAt: now });
+    await repository.saveArtifact(project.id, "route_segments", { projectId: project.id, segments: stats.routeSegments, updatedAt: now });
+    await repository.writeProjectFile(project.id, "route_segments.geojson", JSON.stringify(buildSegmentsGeoJson(project.id, stats.segmentLines, points), null, 2));
+  } else {
+    const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+    await writeJsonFile(join(project.folderPath, "route_summary.json"), summary);
+    await writeJsonFile(join(project.folderPath, "elevation_profile.json"), { projectId: project.id, points: stats.elevationProfile });
+    await writeJsonFile(join(project.folderPath, "route_warnings.json"), { projectId: project.id, warnings, updatedAt: now });
+    await writeJsonFile(join(project.folderPath, "route_segments.json"), { projectId: project.id, segments: stats.routeSegments, updatedAt: now });
+    await repositoryWriteFileFallback(join(project.folderPath, "route_segments.geojson"), buildSegmentsGeoJson(project.id, stats.segmentLines, points));
+  }
 
   return summary;
 }
@@ -310,7 +315,7 @@ function inferDifficulty(stats: { distanceKm: number, elevationGainM: number }):
   return "easy";
 }
 
-async function fileExists(path: string): Promise<boolean> {
+async function fileExistsFallback(path: string): Promise<boolean> {
   try {
     const { stat } = await import("node:fs/promises");
     await stat(path);
@@ -318,4 +323,9 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function repositoryWriteFileFallback(path: string, data: any): Promise<void> {
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }

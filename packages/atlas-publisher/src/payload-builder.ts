@@ -130,14 +130,23 @@ export async function publishLiveDraft(prepared: PreparedRouteMarketDraft): Prom
 
   console.log(`Publishing payload ${prepared.payloadId} to ${apiUrl}...`);
 
-  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/api/atlas/import`, {
+  // Wrap payload for atlas-admin action: import_payload
+  const body = {
+    action: "import_payload",
+    input: {
+      payload: prepared
+    }
+  };
+
+  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/functions/v1/atlas-admin`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${apiToken}`,
+      "apikey": apiToken,
       "X-Atlas-Payload-Id": prepared.payloadId
     },
-    body: JSON.stringify(prepared)
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -145,8 +154,16 @@ export async function publishLiveDraft(prepared: PreparedRouteMarketDraft): Prom
     throw new Error(`RouteMarket API error (${response.status}): ${errorBody}`);
   }
 
-  const result = await response.json() as { success: boolean; remoteId?: number; message?: string };
-  return result;
+  const result = await response.json() as any;
+  if (!result.ok && result.error) {
+    throw new Error(`RouteMarket API processing error: ${result.error}`);
+  }
+
+  return {
+    success: result.ok === true,
+    remoteId: result.route?.id,
+    message: result.reason || (result.imported ? "Successfully imported" : "Imported with issues")
+  };
 }
 
 async function readPoisFromGeoJson(path: string): Promise<Poi[]> {
