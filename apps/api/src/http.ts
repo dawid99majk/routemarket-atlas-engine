@@ -134,6 +134,10 @@ export function startAtlasApi(options: AtlasApiOptions): Server {
 
 function createRoutes(): Route[] {
   return [
+    route("GET", "/", async ({ res }) => {
+      redirect(res, "/reviewer");
+      return undefined;
+    }, { public: true }),
     route("GET", "/health", async () => ({ ok: true }), { public: true }),
     route("GET", "/version", async () => ({ name: "routemarket-atlas-engine", version: "0.1.0" }), { public: true }),
     route("GET", "/manifest", async ({ apiToken }) => apiManifest(Boolean(apiToken)), { public: true }),
@@ -388,6 +392,11 @@ function sendHtml(res: ServerResponse, statusCode: number, body: string): void {
   res.end(body);
 }
 
+function redirect(res: ServerResponse, location: string): void {
+  res.writeHead(302, { Location: location });
+  res.end();
+}
+
 import { ZodError } from "zod";
 import { QualityGateError } from "../../../packages/atlas-workflow/src/index.js";
 
@@ -451,6 +460,7 @@ function apiManifest(authEnabled: boolean) {
       header: "Authorization: Bearer <ATLAS_API_TOKEN>"
     },
     endpoints: [
+      "GET /",
       "GET /health",
       "GET /version",
       "GET /manifest",
