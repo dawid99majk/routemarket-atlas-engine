@@ -150,3 +150,57 @@ describe("search providers", () => {
     expect(JSON.stringify(status)).not.toContain("gemini_secret");
   });
 });
+
+import { GeminiDeepResearchProvider } from "../packages/atlas-research/src/providers/gemini-deep-research-provider.js";
+
+describe("GeminiDeepResearchProvider", () => {
+  it("extracts POIs and claims from scraped web content", async () => {
+    const origFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = vi.fn(async (url) => {
+        if (String(url).includes("example.com")) {
+          return new Response("<html><body>Stelvio Pass is a great pass. Closed in winter.</body></html>", { status: 200 });
+        }
+        return new Response("Not found", { status: 404 });
+      }) as any;
+
+      let requestedUrl: string | undefined;
+      const provider = new GeminiDeepResearchProvider("test_gemini_key", {
+        model: "gemini-test-model",
+        fetchImpl: async (url, init) => {
+          requestedUrl = String(url);
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          pois: [{ name: "Stelvio Pass", type: "viewpoint", description: "Great pass", lat: 46.529, lng: 10.453 }],
+                          claims: [{ claim: "Pass is closed in winter", type: "safety", confidence: 0.95 }]
+                        })
+                      }
+                    ]
+                  }
+                }
+              ]
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+      });
+
+      const res = await provider.scrapeAndExtract("https://example.com/source", "Stelvio Pass");
+
+      expect(requestedUrl).toContain("gemini-test-model:generateContent");
+      expect(res.pois).toHaveLength(1);
+      expect(res.pois[0]).toMatchObject({ name: "Stelvio Pass", type: "viewpoint", lat: 46.529, lng: 10.453, isVerifiedByDeepResearch: true });
+      expect(res.claims).toHaveLength(1);
+      expect(res.claims[0]).toMatchObject({ claim: "Pass is closed in winter", type: "safety", confidence: 0.95 });
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+

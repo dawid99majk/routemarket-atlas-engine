@@ -1,5 +1,6 @@
 import { startAtlasApi } from "./http.js";
 import { FileProjectRepository, PostgresProjectRepository } from "../../../packages/atlas-core/src/index.js";
+import { getSearchProviderStatus } from "../../../packages/atlas-research/src/providers/provider-factory.js";
 
 const port = Number(process.env.PORT ?? process.env.ATLAS_API_PORT ?? 8787);
 const rootDir = process.env.ATLAS_ROOT_DIR ?? process.cwd();
@@ -16,6 +17,12 @@ const repository = (supabaseUrl && supabaseKey)
   : new FileProjectRepository(rootDir);
 
 const server = startAtlasApi({ rootDir, port, corsOrigin, apiToken, logRequests, maxJobs, jobsDir, repository });
+
+const searchStatus = getSearchProviderStatus();
+const configuredSearch = searchStatus.providers.filter((p) => p.configured).map((p) => p.id).join(", ");
+console.log(`Atlas Search Providers: default=${searchStatus.defaultProvider}, configured=[${configuredSearch}]`);
+const deepResearchMode = process.env.GEMINI_API_KEY ? "gemini" : process.env.ANTHROPIC_API_KEY ? "anthropic" : "mock";
+console.log(`Atlas Deep Research Provider: ${deepResearchMode}`);
 
 if (process.env.NODE_ENV === "production") {
   if (!apiToken) {

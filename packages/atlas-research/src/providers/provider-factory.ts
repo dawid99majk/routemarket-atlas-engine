@@ -91,3 +91,4 @@ export function createDeepResearchProvider(options: SearchProviderFactoryOptions
   }
   return { provider: new MockDeepResearchProvider(), providerName: "mock" };
 }
+

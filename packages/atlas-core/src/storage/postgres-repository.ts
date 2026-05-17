@@ -139,7 +139,7 @@ export class PostgresProjectRepository implements ProjectRepository {
       .order("updated_at", { ascending: false });
 
     if (error) throw error;
-    return (data || []).map(d => RouteProjectSchema.parse(d.data));
+    return (data || []).map((d: any) => RouteProjectSchema.parse(d.data));
   }
 
   async loadSources(slug: string): Promise<Source[]> {
