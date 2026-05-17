@@ -585,7 +585,7 @@ export class AtlasWorkflowService {
     });
   }
 
-  async approveStage(projectSlug: string, stage: string, decision: import("./review.js").ApprovalDecision, notes?: string) {
+  async approveStage(projectSlug: string, stage: string, decision: import("./review.js").ApprovalDecision, notes?: string, reviewer?: string) {
     const project = await this.repository.getProject(projectSlug);
     const { saveProjectApprovalDecision } = await import("./review.js");
     const result = await saveProjectApprovalDecision({
@@ -593,6 +593,7 @@ export class AtlasWorkflowService {
       repository: this.repository,
       stage,
       decision,
+      reviewer,
       notes
     });
     await writeWorkflowState(project, { waitingApprovalStage: undefined, nextStep: nextStepAfterStage(stage) }, this.repository);

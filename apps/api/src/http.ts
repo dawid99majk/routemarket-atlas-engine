@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import { AtlasWorkflowService } from "../../../packages/atlas-workflow/src/index.js";
 import { FileProjectRepository, PostgresProjectRepository } from "../../../packages/atlas-core/src/index.js";
 import { badRequest, HttpError, notFound, unauthorized } from "./errors.js";
+import { reviewerPageHtml } from "./reviewer-page.js";
 import { JobManager } from "./jobs.js";
 import {
   CreateProjectBodySchema,
@@ -18,6 +19,7 @@ import {
   JobApprovalBodySchema,
   PruneJobsBodySchema,
   SubmitReviewDecisionBodySchema,
+  SubmitStageApprovalBodySchema,
   UpdateProjectStatusBodySchema,
   WriteProjectFileBodySchema
 } from "./schemas.js";
@@ -53,6 +55,12 @@ type Route = {
   handler: Handler;
   public?: boolean;
 };
+
+function validateApprovalStage(stage: string) {
+  if (!/^[a-z0-9_]+$/.test(stage)) {
+    throw badRequest(`Invalid approval stage provided: "${stage}".`);
+  }
+}
 
 function validateSlug(slug: string) {
   // Strict alphanumeric slug validation to prevent path traversal
@@ -130,6 +138,10 @@ function createRoutes(): Route[] {
     route("GET", "/health", async () => ({ ok: true }), { public: true }),
     route("GET", "/version", async () => ({ name: "routemarket-atlas-engine", version: "0.1.0" }), { public: true }),
     route("GET", "/manifest", async ({ apiToken }) => apiManifest(Boolean(apiToken)), { public: true }),
+    route("GET", "/reviewer", async ({ res }) => {
+      sendHtml(res, 200, reviewerPageHtml());
+      return undefined;
+    }, { public: true }),
     route("GET", "/categories", async ({ service }) => ({ categories: service.listCategories() })),
     route("GET", "/providers", async ({ service }) => service.listSourceProviders()),
     route("GET", "/dashboard", async ({ service }) => service.dashboard()),
@@ -148,6 +160,12 @@ function createRoutes(): Route[] {
     route("POST", "/projects/:slug/review/decision", async ({ req, params, service }) => {
       const body = SubmitReviewDecisionBodySchema.parse(await readJson(req));
       return service.submitReviewDecision(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/approvals/:stage", async ({ req, params, service }) => {
+      validateApprovalStage(params.stage);
+      const body = SubmitStageApprovalBodySchema.parse(await readJson(req));
+      await service.approveStage(params.slug, params.stage, body.decision, body.notes, body.reviewer);
+      return { stage: params.stage, decision: body.decision };
     }),
     route("PATCH", "/projects/:slug/status", async ({ req, params, service }) => {
       const body = UpdateProjectStatusBodySchema.parse(await readJson(req));
@@ -324,6 +342,11 @@ function sendJson(res: ServerResponse, statusCode: number, body: unknown): void 
   res.end(`${JSON.stringify(body, null, 2)}\n`);
 }
 
+function sendHtml(res: ServerResponse, statusCode: number, body: string): void {
+  res.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(body);
+}
+
 import { ZodError } from "zod";
 import { QualityGateError } from "../../../packages/atlas-workflow/src/index.js";
 
@@ -390,6 +413,7 @@ function apiManifest(authEnabled: boolean) {
       "GET /health",
       "GET /version",
       "GET /manifest",
+      "GET /reviewer",
       "GET /categories",
       "GET /providers",
       "GET /dashboard",
@@ -403,6 +427,7 @@ function apiManifest(authEnabled: boolean) {
       "GET /projects/:slug/readiness",
       "GET /projects/:slug/review",
       "POST /projects/:slug/review/decision",
+      "POST /projects/:slug/approvals/:stage",
       "PATCH /projects/:slug/status",
       "GET /projects/:slug/artifacts",
       "GET /projects/:slug/events",

@@ -311,6 +311,12 @@ describe("Atlas API", () => {
 
     const manifest = await getJson(`${baseUrl}/manifest`);
     expect(manifest.auth.enabled).toBe(true);
+    expect(manifest.endpoints).toContain("GET /reviewer");
+    expect(manifest.endpoints).toContain("POST /projects/:slug/approvals/:stage");
+
+    const reviewer = await fetch(`${baseUrl}/reviewer`);
+    expect(reviewer.status).toBe(200);
+    expect(await reviewer.text()).toContain("Atlas Reviewer");
 
     const unauthorized = await fetch(`${baseUrl}/projects`);
     expect(unauthorized.status).toBe(401);
@@ -323,6 +329,16 @@ describe("Atlas API", () => {
       language: "en"
     });
     expect(created.id).toBe("albania-motorcycle-route-7-days");
+
+    const approval = await fetch(`${baseUrl}/projects/${created.id}/approvals/gpx_summary_approval`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer secret" },
+      body: JSON.stringify({ decision: "approved", reviewer: "Atlas QA", notes: "Reviewer UI test." })
+    });
+    expect(approval.status).toBe(200);
+
+    const review = await client.getProjectReview(created.id);
+    expect(review.approvals.approvals.some((item: any) => item.stage === "gpx_summary_approval" && item.reviewer === "Atlas QA")).toBe(true);
   });
 
   it("returns structured client errors", async () => {

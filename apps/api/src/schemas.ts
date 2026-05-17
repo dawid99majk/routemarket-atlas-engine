@@ -44,6 +44,12 @@ export const SubmitReviewDecisionBodySchema = z.object({
   notes: z.string().max(2000).optional()
 });
 
+export const SubmitStageApprovalBodySchema = z.object({
+  decision: z.enum(["approved", "changes_requested", "rejected"]),
+  reviewer: z.string().min(1).max(100).optional(),
+  notes: z.string().max(2000).optional()
+});
+
 export const WriteProjectFileBodySchema = z.object({
   content: z.string().max(1_000_000) // 1MB limit for generic file writes
 });
