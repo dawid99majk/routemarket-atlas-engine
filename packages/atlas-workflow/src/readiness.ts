@@ -1,5 +1,6 @@
 import type { Claim, RouteProject, Source } from "../../atlas-core/src/index.js";
 import type { ProjectArtifact } from "./artifacts.js";
+import type { RouteMarketImportReadiness } from "../../atlas-publisher/src/types.js";
 
 export type ReadinessStatus = "ready" | "needs_review" | "blocked";
 
@@ -18,6 +19,7 @@ export type ReadinessReport = {
   checks: ReadinessCheck[];
   blockingCount: number;
   warningCount: number;
+  importReadiness?: RouteMarketImportReadiness;
 };
 
 export function assessProjectReadiness(input: {

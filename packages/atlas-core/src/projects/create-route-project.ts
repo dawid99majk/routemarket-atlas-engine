@@ -6,12 +6,7 @@ import { routesPath } from "../storage/paths.js";
 import { writeJsonFile } from "../storage/json.js";
 import { slugify } from "./slug.js";
 
-export class ProjectAlreadyExistsError extends Error {
-  constructor(public readonly slug: string) {
-    super(`Project with slug '${slug}' already exists.`);
-    this.name = "ProjectAlreadyExistsError";
-  }
-}
+import { ProjectAlreadyExistsError } from "../errors.js";
 
 export type CreateRouteProjectInput = {
   rootDir: string;

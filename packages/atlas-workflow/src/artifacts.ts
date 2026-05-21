@@ -1,5 +1,6 @@
 import { access, stat } from "node:fs/promises";
 import { join } from "node:path";
+import type { ProjectRepository } from "../../atlas-core/src/index.js";
 
 export type ProjectArtifact = {
   path: string;
@@ -30,6 +31,11 @@ export const projectArtifactDefinitions: Omit<ProjectArtifact, "exists" | "sizeB
   { path: "research/deep/source_003.txt", label: "Deep research source 3", type: "text" },
   { path: "route.gpx", label: "GPX track", type: "gpx" },
   { path: "route.geojson", label: "Route GeoJSON", type: "geojson" },
+  { path: "route_summary.json", label: "Route summary", type: "json" },
+  { path: "route_segments.json", label: "Route segments", type: "json" },
+  { path: "route_segments.geojson", label: "Route segment lines", type: "geojson" },
+  { path: "route_warnings.json", label: "Route warnings", type: "json" },
+  { path: "workflow_state.json", label: "Workflow state", type: "json" },
   { path: "media/license_report.md", label: "Media license report", type: "markdown" },
   { path: "media/manifest.json", label: "Media manifest", type: "json" },
   { path: "missing_inputs.json", label: "Missing inputs report", type: "json" }
@@ -47,6 +53,26 @@ export async function listProjectArtifacts(projectFolder: string): Promise<Proje
           exists: true,
           sizeBytes: fileStat.size,
           updatedAt: fileStat.mtime.toISOString()
+        };
+      } catch {
+        return { ...definition, exists: false };
+      }
+    })
+  );
+}
+
+
+export async function listProjectArtifactsFromRepository(slug: string, repository: ProjectRepository): Promise<ProjectArtifact[]> {
+  return Promise.all(
+    projectArtifactDefinitions.map(async (definition) => {
+      try {
+        const exists = await repository.exists(slug, definition.path);
+        if (!exists) return { ...definition, exists: false };
+        const content = await repository.readProjectFile(slug, definition.path).catch(() => undefined);
+        return {
+          ...definition,
+          exists: true,
+          sizeBytes: content ? Buffer.byteLength(content, "utf8") : undefined
         };
       } catch {
         return { ...definition, exists: false };

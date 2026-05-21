@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { createRouteProject } from "../../../../packages/atlas-core/src/index.js";
+import { AtlasWorkflowService } from "../../../../packages/atlas-workflow/src/index.js";
 
 export function registerCreateProjectCommand(program: Command): void {
   program
@@ -10,9 +10,9 @@ export function registerCreateProjectCommand(program: Command): void {
     .option("--region <region>", "Region")
     .option("--language <language>", "Language code", "en")
     .action(async (options) => {
-      const project = await createRouteProject({
-        rootDir: process.cwd(),
-        title: options.topic,
+      const service = new AtlasWorkflowService({ rootDir: process.cwd() });
+      const project = await service.createProject({
+        topic: options.topic,
         category: options.category,
         region: options.region,
         language: options.language

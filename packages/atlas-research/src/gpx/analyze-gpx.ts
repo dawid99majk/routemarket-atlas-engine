@@ -1,11 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { 
-  readJsonFile, 
-  writeJsonFile, 
   type RouteProject, 
   type RouteSummary,
-  type MissingInputs
+  type MissingInputs,
+  type ProjectRepository
 } from "../../../atlas-core/src/index.js";
 
 type GpxPoint = {
@@ -15,38 +14,57 @@ type GpxPoint = {
   time?: string;
 };
 
-export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
+type RouteWarning = { code: string; message: string; severity: "low" | "medium" | "high" };
+type RouteSegment = {
+  index: number;
+  from: string;
+  to: string;
+  distanceKm: number;
+  elevationGainM?: number;
+  estimatedTimeH?: number;
+};
+
+export async function analyzeGpx(project: RouteProject, repository?: ProjectRepository): Promise<RouteSummary> {
   const now = new Date().toISOString();
-  // We check both the main project folder and the input/gpx folder
-  let gpxPath = join(project.folderPath, "route.gpx");
   
-  // Try to find the first GPX in input/gpx if the main one doesn't exist
-  if (!(await fileExists(gpxPath))) {
-    const inputGpxDir = join(project.folderPath, "input", "gpx");
+  let gpxContent: string;
+  if (repository) {
     try {
-      const { loadInputManifest } = await import("../../../atlas-core/src/index.js");
-      const manifest = await loadInputManifest(project.folderPath);
+      gpxContent = await repository.readProjectFile(project.id, "route.gpx");
+    } catch {
+      // Try to find in manifest if not at root
+      const manifest = await repository.loadInputManifest(project.id);
       const gpxItem = manifest.items.find(i => i.type === "gpx");
       if (gpxItem) {
-        gpxPath = join(project.folderPath, gpxItem.path);
+        gpxContent = await repository.readProjectFile(project.id, gpxItem.path);
+      } else {
+        throw new Error(`No GPX file found for project: ${project.id}`);
       }
-    } catch {
-      // Ignore
     }
+  } else {
+    let gpxPath = join(project.folderPath, "route.gpx");
+    if (!(await fileExistsFallback(gpxPath))) {
+      try {
+        const { loadInputManifest } = await import("../../../atlas-core/src/index.js");
+        const manifest = await loadInputManifest(project.folderPath);
+        const gpxItem = manifest.items.find(i => i.type === "gpx");
+        if (gpxItem) gpxPath = join(project.folderPath, gpxItem.path);
+      } catch {}
+    }
+    if (!(await fileExistsFallback(gpxPath))) throw new Error(`No GPX file found for project: ${project.id}`);
+    gpxContent = await readFile(gpxPath, "utf8");
   }
 
-  if (!(await fileExists(gpxPath))) {
-    throw new Error(`No GPX file found for project: ${project.id}`);
-  }
-
-  const gpxContent = await readFile(gpxPath, "utf8");
-  const points = parseGpxPoints(gpxContent);
+  const parsed = parseGpxPoints(gpxContent);
+  const points = parsed.points;
+  const warnings: RouteWarning[] = [...parsed.warnings];
 
   if (points.length < 2) {
     throw new Error("GPX file contains too few points for analysis.");
   }
 
   const stats = calculateStats(points);
+  warnings.push(...stats.warnings);
   
   if (stats.distanceKm < 0.5) {
     const missing: MissingInputs = {
@@ -59,69 +77,109 @@ export async function analyzeGpx(project: RouteProject): Promise<RouteSummary> {
         requiredFor: "guide_final"
       }]
     };
-    await writeJsonFile(join(project.folderPath, "missing_inputs.json"), missing);
+    if (repository) {
+      await repository.saveMissingInputs(project.id, missing);
+    } else {
+      const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+      await writeJsonFile(join(project.folderPath, "missing_inputs.json"), missing);
+    }
     throw new Error(`GPX too short: ${stats.distanceKm.toFixed(2)} km`);
   }
 
   const summary: RouteSummary = {
     distanceKm: Math.round(stats.distanceKm * 10) / 10,
-    elevationGainM: Math.round(stats.elevationGainM),
-    estimatedTimeH: Math.round((stats.distanceKm / 15) * 10) / 10,
+    elevationGainM: stats.hasElevation ? Math.round(stats.elevationGainM) : undefined,
+    estimatedTimeH: estimateTime(project.category, stats.distanceKm, stats.elevationGainM, stats.elapsedHours),
     difficulty: inferDifficulty(stats),
     riskLevel: "unknown",
     loopType: stats.isLoop ? "loop" : "point_to_point",
-    season: "May-October",
-    startPoint: `Start in ${project.region} (lat: ${points[0].lat.toFixed(3)})`,
-    endPoint: stats.isLoop ? "Back to start" : `End in ${project.region} (lat: ${points[points.length - 1].lat.toFixed(3)})`,
-    surfaceType: "mixed",
+    startPoint: formatPoint(points[0]),
+    endPoint: stats.isLoop ? "Back to start" : formatPoint(points[points.length - 1]),
+    season: undefined,
+    surfaceType: undefined,
     hasElevation: stats.hasElevation,
     hasTime: stats.hasTime,
     isLoop: stats.isLoop,
+    routeSegments: stats.routeSegments,
+    warnings: warnings.map(w => ({ code: w.code, message: w.message })),
     validationStatus: "needs_validation",
     updatedAt: now
   };
 
-  await writeJsonFile(join(project.folderPath, "route_summary.json"), summary);
-  
-  // Save elevation profile
-  await writeJsonFile(join(project.folderPath, "elevation_profile.json"), {
-    projectId: project.id,
-    points: stats.elevationProfile
-  });
+  if (repository) {
+    await repository.saveSummary(project.id, summary);
+    await repository.saveArtifact(project.id, "elevation_profile", { projectId: project.id, points: stats.elevationProfile });
+    await repository.saveArtifact(project.id, "route_warnings", { projectId: project.id, warnings, updatedAt: now });
+    await repository.saveArtifact(project.id, "route_segments", { projectId: project.id, segments: stats.routeSegments, updatedAt: now });
+    await repository.writeProjectFile(project.id, "route_segments.geojson", JSON.stringify(buildSegmentsGeoJson(project.id, stats.segmentLines, points), null, 2));
+  } else {
+    const { writeJsonFile } = await import("../../../atlas-core/src/index.js");
+    await writeJsonFile(join(project.folderPath, "route_summary.json"), summary);
+    await writeJsonFile(join(project.folderPath, "elevation_profile.json"), { projectId: project.id, points: stats.elevationProfile });
+    await writeJsonFile(join(project.folderPath, "route_warnings.json"), { projectId: project.id, warnings, updatedAt: now });
+    await writeJsonFile(join(project.folderPath, "route_segments.json"), { projectId: project.id, segments: stats.routeSegments, updatedAt: now });
+    await repositoryWriteFileFallback(join(project.folderPath, "route_segments.geojson"), buildSegmentsGeoJson(project.id, stats.segmentLines, points));
+  }
 
   return summary;
 }
 
-function parseGpxPoints(xml: string): GpxPoint[] {
+function parseGpxPoints(xml: string): { points: GpxPoint[]; warnings: RouteWarning[] } {
   const points: GpxPoint[] = [];
-  const trkptRegex = /<trkpt\s+lat="([^"]+)"\s+lon="([^"]+)"[^>]*>(.*?)<\/trkpt>/gs;
+  const warnings: RouteWarning[] = [];
+  let source = "track_points";
+  let pointRegex = /<trkpt\b([^>]*)>(.*?)<\/trkpt>/gis;
+  if (!pointRegex.test(xml)) {
+    pointRegex = /<rtept\b([^>]*)>(.*?)<\/rtept>/gis;
+    source = "route_points";
+  }
+  pointRegex.lastIndex = 0;
+  const attrRegex = /\b(lat|lon)=["']([^"']+)["']/gi;
   const eleRegex = /<ele>([^<]+)<\/ele>/;
   const timeRegex = /<time>([^<]+)<\/time>/;
 
   let match;
-  while ((match = trkptRegex.exec(xml)) !== null) {
-    const lat = parseFloat(match[1]);
-    const lon = parseFloat(match[2]);
-    const inner = match[3];
+  let skipped = 0;
+  while ((match = pointRegex.exec(xml)) !== null) {
+    const attrs = match[1];
+    const values: Record<string, string> = {};
+    let attrMatch;
+    while ((attrMatch = attrRegex.exec(attrs)) !== null) values[attrMatch[1].toLowerCase()] = attrMatch[2];
+    const lat = parseFloat(values.lat ?? "");
+    const lon = parseFloat(values.lon ?? "");
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      skipped += 1;
+      continue;
+    }
+    const inner = match[2];
     
     const eleMatch = eleRegex.exec(inner);
     const timeMatch = timeRegex.exec(inner);
+    const ele = eleMatch ? parseFloat(eleMatch[1]) : undefined;
 
     points.push({
       lat,
       lon,
-      ele: eleMatch ? parseFloat(eleMatch[1]) : undefined,
+      ele: ele !== undefined && Number.isFinite(ele) ? ele : undefined,
       time: timeMatch ? timeMatch[1] : undefined
     });
   }
+  warnings.push({ code: source, message: `Analyzed GPX using ${source === "track_points" ? "track points" : "route points"}.`, severity: "low" });
+  if (skipped > 0) warnings.push({ code: "invalid_points_skipped", message: `Skipped ${skipped} GPX point(s) with invalid coordinates.`, severity: "medium" });
 
-  return points;
+  return { points, warnings };
 }
 
 function calculateStats(points: GpxPoint[]) {
   let distanceKm = 0;
   let elevationGainM = 0;
   const elevationProfile: { d: number; e: number }[] = [];
+  const warnings: RouteWarning[] = [];
+  const routeSegments: RouteSegment[] = [];
+  const segmentLines: Array<RouteSegment & { coordinates: number[][]; pointCount: number }> = [];
+  let segmentDistance = 0;
+  let segmentGain = 0;
+  const segmentSize = Math.max(1, Math.floor((points.length - 1) / 5));
 
   for (let i = 0; i < points.length - 1; i++) {
     const p1 = points[i];
@@ -129,14 +187,40 @@ function calculateStats(points: GpxPoint[]) {
     
     const d = haversineDistance(p1.lat, p1.lon, p2.lat, p2.lon);
     distanceKm += d;
+    segmentDistance += d;
 
     if (p1.ele !== undefined && p2.ele !== undefined) {
       const diff = p2.ele - p1.ele;
-      if (diff > 0) elevationGainM += diff;
+      if (diff > 0) {
+        elevationGainM += diff;
+        segmentGain += diff;
+      }
     }
 
     if (i % Math.max(1, Math.floor(points.length / 50)) === 0) {
       elevationProfile.push({ d: Math.round(distanceKm * 10) / 10, e: Math.round(p1.ele ?? 0) });
+    }
+
+    const isSegmentBoundary = (i + 1) % segmentSize === 0 || i === points.length - 2;
+    if (isSegmentBoundary) {
+      const index = routeSegments.length + 1;
+      const startIndex = Math.max(0, i + 1 - segmentSize);
+      const segmentPoints = points.slice(startIndex, i + 2);
+      const summary = {
+        index,
+        from: formatPoint(points[startIndex]),
+        to: formatPoint(p2),
+        distanceKm: Math.round(segmentDistance * 10) / 10,
+        elevationGainM: Math.round(segmentGain)
+      };
+      routeSegments.push(summary);
+      segmentLines.push({
+        ...summary,
+        pointCount: segmentPoints.length,
+        coordinates: segmentPoints.map((point) => [point.lon, point.lat])
+      });
+      segmentDistance = 0;
+      segmentGain = 0;
     }
   }
 
@@ -146,8 +230,70 @@ function calculateStats(points: GpxPoint[]) {
   const isLoop = startEndDist < 0.5 || startEndDist < distanceKm * 0.05;
   const hasElevation = points.some(p => p.ele !== undefined);
   const hasTime = points.some(p => p.time !== undefined);
+  const elapsedHours = elapsedTimeHours(points);
+  if (!hasElevation) warnings.push({ code: "missing_elevation", message: "GPX does not contain elevation data.", severity: "medium" });
+  if (!hasTime) warnings.push({ code: "missing_timestamps", message: "GPX does not contain timestamps, so duration is estimated by category.", severity: "low" });
+  if (distanceKm < 1) warnings.push({ code: "suspiciously_short_track", message: `GPX track is suspiciously short (${distanceKm.toFixed(2)} km).`, severity: "high" });
 
-  return { distanceKm, elevationGainM, isLoop, hasElevation, hasTime, elevationProfile };
+  return { distanceKm, elevationGainM, isLoop, hasElevation, hasTime, elapsedHours, elevationProfile, routeSegments, segmentLines, warnings };
+}
+
+function buildSegmentsGeoJson(projectId: string, segments: Array<RouteSegment & { coordinates: number[][]; pointCount: number }>, fullPoints: GpxPoint[]) {
+  return {
+    type: "FeatureCollection",
+    properties: { projectId },
+    features: [
+      {
+        type: "Feature",
+        properties: {
+          type: "full_track",
+          pointCount: fullPoints.length
+        },
+        geometry: {
+          type: "LineString",
+          coordinates: fullPoints.map((p) => [p.lon, p.lat])
+        }
+      },
+      ...segments.map((segment) => ({
+        type: "Feature",
+        properties: {
+          index: segment.index,
+          distanceKm: segment.distanceKm,
+          elevationGainM: segment.elevationGainM ?? 0,
+          pointCount: segment.pointCount,
+          start: segment.from,
+          end: segment.to,
+          type: "segment"
+        },
+        geometry: {
+          type: "LineString",
+          coordinates: segment.coordinates
+        }
+      }))
+    ]
+  };
+}
+
+function elapsedTimeHours(points: GpxPoint[]): number | undefined {
+  const first = points.find((p) => p.time)?.time;
+  const last = [...points].reverse().find((p) => p.time)?.time;
+  if (!first || !last) return undefined;
+  const start = Date.parse(first);
+  const end = Date.parse(last);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return undefined;
+  return Math.round(((end - start) / 3_600_000) * 10) / 10;
+}
+
+function estimateTime(category: string, distanceKm: number, elevationGainM: number, elapsedHours?: number): number {
+  if (elapsedHours && elapsedHours > 0) return elapsedHours;
+  if (category === "motorcycle") return Math.max(0.1, Math.round((distanceKm / 45) * 10) / 10);
+  if (category === "bike" || category === "cycling") return Math.max(0.1, Math.round((distanceKm / 15) * 10) / 10);
+  if (category === "hiking" || category === "trekking") return Math.max(0.1, Math.round(((distanceKm / 4) + (elevationGainM / 600)) * 10) / 10);
+  return Math.max(0.1, Math.round((distanceKm / 10) * 10) / 10);
+}
+
+function formatPoint(point: GpxPoint): string {
+  return `${point.lat.toFixed(5)}, ${point.lon.toFixed(5)}`;
 }
 
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -169,7 +315,7 @@ function inferDifficulty(stats: { distanceKm: number, elevationGainM: number }):
   return "easy";
 }
 
-async function fileExists(path: string): Promise<boolean> {
+async function fileExistsFallback(path: string): Promise<boolean> {
   try {
     const { stat } = await import("node:fs/promises");
     await stat(path);
@@ -177,4 +323,9 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function repositoryWriteFileFallback(path: string, data: any): Promise<void> {
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }

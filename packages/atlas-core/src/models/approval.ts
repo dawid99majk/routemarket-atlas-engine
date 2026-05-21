@@ -22,7 +22,15 @@ export const ApprovalRecordSchema = z.object({
   reviewer: z.string(),
   notes: z.string().optional(),
   decidedAt: z.string(),
-  dataPatchPath: z.string().optional()
+  dataPatchPath: z.string().optional(),
+  artifactHashes: z.record(z.string(), z.string()).optional(),
+  audit: z.object({
+    changedClaims: z.number().optional(),
+    verifiedClaims: z.number().optional(),
+    likelyClaims: z.number().optional(),
+    unchangedClaims: z.number().optional(),
+    changedPoi: z.number().optional()
+  }).optional()
 });
 
 export const ApprovalsSchema = z.object({

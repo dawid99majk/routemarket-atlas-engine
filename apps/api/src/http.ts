@@ -1,21 +1,30 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { AtlasWorkflowService } from "../../../packages/atlas-workflow/src/index.js";
+import { FileProjectRepository, PostgresProjectRepository } from "../../../packages/atlas-core/src/index.js";
 import { badRequest, HttpError, notFound, unauthorized } from "./errors.js";
+import { reviewerPageHtml } from "./reviewer-page.js";
 import { JobManager } from "./jobs.js";
 import {
   CreateProjectBodySchema,
   DiscoverBodySchema,
   EmptyBodySchema,
+  AddGpxBodySchema,
+  AddLinkBodySchema,
+  AddNoteBodySchema,
+  RegisterExternalInputBodySchema,
   ArchiveProjectBodySchema,
   CollectSourcesBodySchema,
   DeepResearchBodySchema,
   JobApprovalBodySchema,
   PruneJobsBodySchema,
   SubmitReviewDecisionBodySchema,
+  SubmitStageApprovalBodySchema,
   UpdateProjectStatusBodySchema,
   WriteProjectFileBodySchema
 } from "./schemas.js";
+
+import type { ProjectRepository } from "../../../packages/atlas-core/src/index.js";
 
 export type AtlasApiOptions = {
   rootDir: string;
@@ -24,6 +33,8 @@ export type AtlasApiOptions = {
   apiToken?: string;
   logRequests?: boolean;
   maxJobs?: number;
+  jobsDir?: string;
+  repository?: ProjectRepository;
 };
 
 type RouteParams = Record<string, string>;
@@ -48,9 +59,23 @@ type Route = {
   public?: boolean;
 };
 
+function validateApprovalStage(stage: string) {
+  if (!/^[a-z0-9_]+$/.test(stage)) {
+    throw badRequest(`Invalid approval stage provided: "${stage}".`);
+  }
+}
+
+function validateSlug(slug: string) {
+  // Strict alphanumeric slug validation to prevent path traversal
+  if (!/^[a-z0-9-]+$/.test(slug)) {
+    throw badRequest(`Invalid slug provided: "${slug}". Only lowercase letters, numbers, and dashes are allowed.`);
+  }
+}
+
 export function createAtlasApiServer(options: AtlasApiOptions): Server {
-  const service = new AtlasWorkflowService({ rootDir: options.rootDir });
-  const jobs = new JobManager({ maxJobs: options.maxJobs });
+  const repository = options.repository ?? new FileProjectRepository(options.rootDir);
+  const service = new AtlasWorkflowService({ rootDir: options.rootDir, repository });
+  const jobs = new JobManager({ maxJobs: options.maxJobs, jobsDir: options.jobsDir, repository });
   const corsOrigin = options.corsOrigin ?? "*";
   const apiToken = options.apiToken;
   const logRequests = options.logRequests ?? false;
@@ -75,6 +100,8 @@ export function createAtlasApiServer(options: AtlasApiOptions): Server {
 
     try {
       if (apiToken && !matchedRoute.public) assertAuthorized(req, apiToken);
+      if (matchedRoute.params.slug) validateSlug(matchedRoute.params.slug);
+      
       const result = await matchedRoute.handler({
         req,
         res,
@@ -107,9 +134,17 @@ export function startAtlasApi(options: AtlasApiOptions): Server {
 
 function createRoutes(): Route[] {
   return [
+    route("GET", "/", async ({ res }) => {
+      redirect(res, "/reviewer");
+      return undefined;
+    }, { public: true }),
     route("GET", "/health", async () => ({ ok: true }), { public: true }),
     route("GET", "/version", async () => ({ name: "routemarket-atlas-engine", version: "0.1.0" }), { public: true }),
     route("GET", "/manifest", async ({ apiToken }) => apiManifest(Boolean(apiToken)), { public: true }),
+    route("GET", "/reviewer", async ({ res }) => {
+      sendHtml(res, 200, reviewerPageHtml());
+      return undefined;
+    }, { public: true }),
     route("GET", "/categories", async ({ service }) => ({ categories: service.listCategories() })),
     route("GET", "/providers", async ({ service }) => service.listSourceProviders()),
     route("GET", "/dashboard", async ({ service }) => service.dashboard()),
@@ -117,6 +152,10 @@ function createRoutes(): Route[] {
     route("POST", "/projects", async ({ req, service }) => service.createProject(CreateProjectBodySchema.parse(await readJson(req)))),
     route("GET", "/projects", async ({ service, url }) => service.listProjects(projectFiltersFromUrl(url))),
     route("GET", "/projects/:slug", async ({ params, service }) => ({ project: await service.getProject(params.slug) })),
+    route("DELETE", "/projects/:slug", async ({ params, service }) => {
+      await service.deleteProject(params.slug);
+      return { success: true };
+    }),
     route("GET", "/projects/:slug/bundle", async ({ params, service }) => service.getProjectBundle(params.slug)),
     route("GET", "/projects/:slug/export", async ({ params, service }) => service.exportProject(params.slug)),
     route("POST", "/projects/:slug/archive", async ({ req, params, service }) => {
@@ -129,6 +168,12 @@ function createRoutes(): Route[] {
       const body = SubmitReviewDecisionBodySchema.parse(await readJson(req));
       return service.submitReviewDecision(params.slug, body);
     }),
+    route("POST", "/projects/:slug/approvals/:stage", async ({ req, params, service }) => {
+      validateApprovalStage(params.stage);
+      const body = SubmitStageApprovalBodySchema.parse(await readJson(req));
+      await service.approveStage(params.slug, params.stage, body.decision, body.notes, body.reviewer);
+      return { stage: params.stage, decision: body.decision };
+    }),
     route("PATCH", "/projects/:slug/status", async ({ req, params, service }) => {
       const body = UpdateProjectStatusBodySchema.parse(await readJson(req));
       return { project: await service.setProjectStatus(params.slug, body.status) };
@@ -139,9 +184,55 @@ function createRoutes(): Route[] {
       const body = CollectSourcesBodySchema.parse(await readJson(req));
       return { sources: await service.collectSources(params.slug, body) };
     }),
+    route("POST", "/projects/:slug/jobs/collect-sources", async ({ req, params, service, jobs }) => {
+      const body = CollectSourcesBodySchema.parse(await readJson(req));
+      return {
+        job: jobs.start(`collect-sources:${params.slug}`, async (update) => {
+          update({ message: "Collecting route sources.", progress: 10, currentStep: "collect_sources" });
+          const sources = await service.collectSources(params.slug, body);
+          update({ message: `Collected ${sources.length} sources.`, progress: 100, currentStep: "collect_sources" });
+          return { sourceCount: sources.length };
+        }, params.slug)
+      };
+    }),
+    route("POST", "/projects/:slug/inputs/notes", async ({ req, params, service }) => {
+      const body = AddNoteBodySchema.parse(await readJson(req, 2_500_000)); // 2.5MB raw buffer limit for 2MB content string
+      return service.addNoteText(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/inputs/gpx", async ({ req, params, service }) => {
+      const body = AddGpxBodySchema.parse(await readJson(req, 11_000_000)); // 11MB raw buffer limit for 10MB content string
+      return service.addGpxText(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/inputs/links", async ({ req, params, service }) => {
+      const body = AddLinkBodySchema.parse(await readJson(req));
+      return service.addLink(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/inputs/external", async ({ req, params, service }) => {
+      const body = RegisterExternalInputBodySchema.parse(await readJson(req));
+      return service.registerExternalInput(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/research-pack", async ({ req, params, service }) => {
+      EmptyBodySchema.parse(await readJson(req));
+      return service.buildResearchPack(params.slug);
+    }),
+    route("POST", "/projects/:slug/analyze-gpx", async ({ req, params, service }) => {
+      EmptyBodySchema.parse(await readJson(req));
+      return service.analyzeGpx(params.slug);
+    }),
     route("POST", "/projects/:slug/deep-research", async ({ req, params, service }) => {
       const body = DeepResearchBodySchema.parse(await readJson(req));
       return service.runDeepResearch(params.slug, body);
+    }),
+    route("POST", "/projects/:slug/jobs/deep-research", async ({ req, params, service, jobs }) => {
+      const body = DeepResearchBodySchema.parse(await readJson(req));
+      return {
+        job: jobs.start(`deep-research:${params.slug}`, async (update) => {
+          update({ message: "Running Gemini research enrichment.", progress: 10, currentStep: "deep_research" });
+          const report = await service.runDeepResearch(params.slug, body);
+          update({ message: `Processed ${report.processedSourceCount} sources.`, progress: 100, currentStep: "deep_research" });
+          return report;
+        }, params.slug)
+      };
     }),
     route("POST", "/projects/:slug/run-mvp2", async ({ req, params, service }) => {
       EmptyBodySchema.parse(await readJson(req));
@@ -155,6 +246,19 @@ function createRoutes(): Route[] {
     route("GET", "/jobs/pending-approvals", async ({ jobs }) => ({
       jobs: jobs.list().filter(j => j.status === "waiting_for_approval")
     })),
+    route("GET", "/api/jobs/pending-approvals", async ({ jobs }) => ({
+      jobs: jobs.list()
+        .filter(j => j.status === "waiting_for_approval")
+        .map(j => ({
+          id: j.id,
+          type: j.type,
+          status: j.status,
+          progress: j.progress,
+          currentStep: j.currentStep,
+          updatedAt: j.updatedAt,
+          pendingApprovalContext: j.pendingApprovalContext
+        }))
+    })),
     route("POST", "/jobs/:id/approve", async ({ req, params, jobs, service }) => {
       const body = JobApprovalBodySchema.parse(await readJson(req));
       const job = jobs.get(params.id);
@@ -164,10 +268,8 @@ function createRoutes(): Route[] {
       // Resume logic
       const projectSlug = job.type.split(":")[1];
       if (!projectSlug) throw badRequest("Invalid job type for approval.");
+      validateSlug(projectSlug);
 
-      // Next step logic: we need to know what the next step is.
-      // For simplicity, we assume we resume runMvp2. 
-      // In a real system, we'd store the next step in the job context.
       const nextStepMap: Record<string, string> = {
         "gpx_summary_approval": "claims",
         "claims_approval": "pois",
@@ -176,7 +278,38 @@ function createRoutes(): Route[] {
         "guide_outline_approval": "guide",
         "guide_final_approval": "finalize"
       };
-      const nextStep = nextStepMap[job.currentStep ?? ""] ?? "input";
+      const stage = job.currentStep ?? "";
+      await service.approveStage(projectSlug, stage, "approved", "Approved through job resume endpoint.");
+      const nextStep = nextStepMap[stage] ?? "input";
+
+      jobs.resume(params.id, body.approvalData, (update) => 
+        service.runMvp2WithProgress(projectSlug, update, nextStep)
+      );
+
+      return { message: "Job resumed.", jobId: params.id, nextStep };
+    }),
+    route("POST", "/api/jobs/:id/approve", async ({ req, params, jobs, service }) => {
+      const body = JobApprovalBodySchema.parse(await readJson(req));
+      const job = jobs.get(params.id);
+      if (!job) throw notFound("Job not found.");
+      if (job.status !== "waiting_for_approval") throw badRequest("Job is not waiting for approval.");
+
+      // Resume logic
+      const projectSlug = job.type.split(":")[1];
+      if (!projectSlug) throw badRequest("Invalid job type for approval.");
+      validateSlug(projectSlug);
+
+      const nextStepMap: Record<string, string> = {
+        "gpx_summary_approval": "claims",
+        "claims_approval": "pois",
+        "poi_approval": "concept",
+        "concept_approval": "guide_outline",
+        "guide_outline_approval": "guide",
+        "guide_final_approval": "finalize"
+      };
+      const stage = job.currentStep ?? "";
+      await service.approveStage(projectSlug, stage, "approved", "Approved through job resume endpoint.");
+      const nextStep = nextStepMap[stage] ?? "input";
 
       jobs.resume(params.id, body.approvalData, (update) => 
         service.runMvp2WithProgress(projectSlug, update, nextStep)
@@ -208,6 +341,17 @@ function createRoutes(): Route[] {
     route("POST", "/projects/:slug/prepare-publish", async ({ req, params, service }) => {
       EmptyBodySchema.parse(await readJson(req));
       return service.preparePublish(params.slug);
+    }),
+    route("POST", "/projects/:slug/jobs/prepare-publish", async ({ req, params, service, jobs }) => {
+      EmptyBodySchema.parse(await readJson(req));
+      return {
+        job: jobs.start(`prepare-publish:${params.slug}`, async (update) => {
+          update({ message: "Preparing RouteMarket payload.", progress: 20, currentStep: "prepare_publish" });
+          const payload = await service.preparePublish(params.slug);
+          update({ message: "RouteMarket payload prepared.", progress: 100, currentStep: "prepare_publish" });
+          return payload;
+        }, params.slug)
+      };
     }),
     route("GET", "/projects/:slug/files", async ({ params, service, url }) => {
       const file = url.searchParams.get("path");
@@ -243,9 +387,16 @@ function matchRoute(routes: Route[], method: string, pathname: string): (Route &
   return undefined;
 }
 
-async function readJson(req: IncomingMessage): Promise<any> {
+async function readJson(req: IncomingMessage, maxBytes: number = 1_000_000): Promise<any> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  let received = 0;
+  for await (const chunk of req) {
+    received += chunk.length;
+    if (received > maxBytes) {
+      throw badRequest(`Request body too large. Limit is ${maxBytes} bytes.`);
+    }
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   try {
     return raw.trim() ? JSON.parse(raw) : {};
@@ -271,6 +422,16 @@ function setCorsHeaders(res: ServerResponse, corsOrigin: string, reqOrigin?: str
 function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(`${JSON.stringify(body, null, 2)}\n`);
+}
+
+function sendHtml(res: ServerResponse, statusCode: number, body: string): void {
+  res.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(body);
+}
+
+function redirect(res: ServerResponse, location: string): void {
+  res.writeHead(302, { Location: location });
+  res.end();
 }
 
 import { ZodError } from "zod";
@@ -312,6 +473,10 @@ function sendError(res: ServerResponse, error: unknown): void {
     return;
   }
   const message = error instanceof Error ? error.message : "Unknown error";
+  if (message.startsWith("Invalid filename") || message.startsWith("Invalid file extension") || message.includes("too large")) {
+    sendJson(res, 400, { error: message, code: "bad_request" });
+    return;
+  }
   sendJson(res, 500, { error: message, code: "internal_error" });
 }
 
@@ -332,9 +497,11 @@ function apiManifest(authEnabled: boolean) {
       header: "Authorization: Bearer <ATLAS_API_TOKEN>"
     },
     endpoints: [
+      "GET /",
       "GET /health",
       "GET /version",
       "GET /manifest",
+      "GET /reviewer",
       "GET /categories",
       "GET /providers",
       "GET /dashboard",
@@ -348,13 +515,24 @@ function apiManifest(authEnabled: boolean) {
       "GET /projects/:slug/readiness",
       "GET /projects/:slug/review",
       "POST /projects/:slug/review/decision",
+      "POST /projects/:slug/approvals/:stage",
       "PATCH /projects/:slug/status",
       "GET /projects/:slug/artifacts",
       "GET /projects/:slug/events",
       "POST /projects/:slug/collect-sources",
+      "POST /projects/:slug/inputs/notes",
+      "POST /projects/:slug/inputs/gpx",
+      "POST /projects/:slug/inputs/links",
+      "POST /projects/:slug/inputs/external",
+      "POST /projects/:slug/research-pack",
+      "POST /projects/:slug/analyze-gpx",
       "POST /projects/:slug/deep-research",
       "POST /projects/:slug/run-mvp2",
       "POST /projects/:slug/jobs/run-mvp2",
+      "GET /jobs/pending-approvals",
+      "POST /jobs/:id/approve",
+      "GET /api/jobs/pending-approvals",
+      "POST /api/jobs/:id/approve",
       "GET /jobs",
       "POST /jobs/prune",
       "GET /jobs/:id",

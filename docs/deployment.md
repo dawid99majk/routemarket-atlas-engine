@@ -48,7 +48,7 @@ Important values:
 - `ATLAS_API_TOKEN`
 - `ATLAS_LOG_REQUESTS`
 - `ATLAS_MAX_JOBS`
-- `BRAVE_SEARCH_API_KEY` when real web source collection should be enabled
+- `GEMINI_API_KEY` when Google Search grounding and Gemini deep research should be enabled
 
 ## Security Recommendation
 

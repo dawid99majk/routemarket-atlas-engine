@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { RouteProject } from "../../atlas-core/src/index.js";
+import type { ProjectRepository, RouteProject } from "../../atlas-core/src/index.js";
 import type { ProjectArtifact } from "./artifacts.js";
 import type { ProjectEvent } from "./events.js";
 
@@ -8,12 +8,14 @@ export type ProjectExportBundle = {
   project: RouteProject;
   artifacts: Array<ProjectArtifact & { content?: string }>;
   events: ProjectEvent[];
+  repository?: ProjectRepository;
 };
 
 export async function buildProjectExportBundle(input: {
   project: RouteProject;
   artifacts: ProjectArtifact[];
   events: ProjectEvent[];
+  repository?: ProjectRepository;
 }): Promise<ProjectExportBundle> {
   const artifacts = await Promise.all(
     input.artifacts.map(async (artifact) => {
@@ -21,7 +23,9 @@ export async function buildProjectExportBundle(input: {
       try {
         return {
           ...artifact,
-          content: await readFile(`${input.project.folderPath}/${artifact.path}`, "utf8")
+          content: input.repository
+            ? await input.repository.readProjectFile(input.project.id, artifact.path)
+            : await readFile(`${input.project.folderPath}/${artifact.path}`, "utf8")
         };
       } catch {
         return artifact;

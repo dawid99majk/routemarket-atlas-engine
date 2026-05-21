@@ -1,8 +1,7 @@
 import { join } from "node:path";
-import type { Recommendation, RouteProject } from "../../atlas-core/src/index.js";
-import { writeJsonFile } from "../../atlas-core/src/index.js";
+import type { Recommendation, RouteProject, ProjectRepository } from "../../atlas-core/src/index.js";
 
-export async function generateRecommendations(project: RouteProject): Promise<Recommendation[]> {
+export async function generateRecommendations(project: RouteProject, repository?: ProjectRepository): Promise<Recommendation[]> {
   const recommendations: Recommendation[] = [
     {
       id: "rec_001",
@@ -14,6 +13,11 @@ export async function generateRecommendations(project: RouteProject): Promise<Re
     }
   ];
 
-  await writeJsonFile(join(project.folderPath, "recommendations.json"), recommendations);
+  if (repository) {
+    await repository.saveArtifact(project.id, "recommendations", recommendations);
+  } else {
+    const { writeJsonFile } = await import("../../atlas-core/src/index.js");
+    await writeJsonFile(join(project.folderPath, "recommendations.json"), recommendations);
+  }
   return recommendations;
 }

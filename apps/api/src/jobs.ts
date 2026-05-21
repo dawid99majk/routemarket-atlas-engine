@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import type { ProjectRepository } from "../../../packages/atlas-core/src/index.js";
 
 export type JobStatus = "queued" | "running" | "waiting_for_approval" | "completed" | "failed";
 
@@ -10,6 +11,7 @@ export type AtlasJob<T = unknown> = {
   status: JobStatus;
   progress: number;
   currentStep?: string;
+  waitingForStage?: string;
   logs: AtlasJobLog[];
   createdAt: string;
   updatedAt: string;
@@ -46,52 +48,79 @@ export class JobAlreadyRunningError extends Error {
 export class JobManager {
   private readonly jobs = new Map<string, AtlasJob>();
   private readonly locks = new Map<string, string>();
-  private readonly jobsDir: string;
+  private readonly persistFile?: string;
+  private readonly repository?: ProjectRepository;
 
-  constructor(private readonly options: { maxJobs?: number; jobsDir?: string } = {}) {
-    this.jobsDir = options.jobsDir ?? join(process.cwd(), "data", "jobs");
+  constructor(private readonly options: { maxJobs?: number; jobsDir?: string; repository?: ProjectRepository } = {}) {
+    this.repository = options.repository;
+    if (options.jobsDir) {
+      this.persistFile = join(options.jobsDir, "jobs_persistence.json");
+    }
     this.initPersistence();
   }
 
-  private initPersistence() {
-    try {
-      mkdirSync(this.jobsDir, { recursive: true });
-      const files = readdirSync(this.jobsDir);
-      for (const file of files) {
-        if (!file.endsWith(".json") || file.endsWith(".log.json")) continue;
-        try {
-          const content = readFileSync(join(this.jobsDir, file), "utf8");
-          const job: AtlasJob = JSON.parse(content);
-          if (job.status === "running" || job.status === "queued" || job.status === "waiting_for_approval") {
-            job.status = "failed";
-            job.error = "process_restarted";
-            job.updatedAt = new Date().toISOString();
-            this.persistJob(job);
-          }
-          this.jobs.set(job.id, job);
-        } catch (e) {
-          console.error(`Failed to load job from ${file}`, e);
+  private async initPersistence() {
+    if (this.repository) {
+      try {
+        const persisted = await this.repository.loadArtifact("__system__", "active_jobs");
+        if (persisted && Array.isArray(persisted)) {
+          this.loadJobs(persisted);
         }
+      } catch {
+        // System project might not exist yet
       }
-    } catch (e) {
-      console.error("Failed to initialize job persistence", e);
+    } else if (this.persistFile && existsSync(this.persistFile)) {
+      try {
+        const content = readFileSync(this.persistFile, "utf8");
+        const persistedJobs: AtlasJob[] = JSON.parse(content);
+        this.loadJobs(persistedJobs);
+      } catch (e) {
+        console.error("Failed to load jobs persistence from " + this.persistFile, e);
+      }
     }
   }
 
-  private persistJob(job: AtlasJob) {
-    try {
-      const { logs, ...jobWithoutLogs } = job;
-      writeFileSync(join(this.jobsDir, `${job.id}.json`), JSON.stringify(jobWithoutLogs, null, 2), "utf8");
-    } catch (e) {
-      console.error(`Failed to persist job ${job.id}`, e);
+  private loadJobs(persistedJobs: AtlasJob[]) {
+    for (const job of persistedJobs) {
+      if (job.status === "running" || job.status === "queued") {
+        job.status = "failed";
+        job.error = "process_restarted";
+        job.updatedAt = new Date().toISOString();
+      }
+      job.logs = []; // logs remain exclusively in RAM
+      this.jobs.set(job.id, job);
+      
+      if (job.projectSlug && job.status === "waiting_for_approval") {
+        this.locks.set(job.projectSlug, job.id);
+      }
     }
+    this.persistState();
   }
 
-  private persistLog(id: string, log: AtlasJobLog) {
-    try {
-      appendFileSync(join(this.jobsDir, `${id}.log.jsonl`), JSON.stringify(log) + "\\n", "utf8");
-    } catch (e) {
-      console.error(`Failed to persist log for job ${id}`, e);
+  private async persistState() {
+    const activeAndWaiting = Array.from(this.jobs.values())
+      .filter(j => j.status === "queued" || j.status === "running" || j.status === "waiting_for_approval")
+      .map(job => {
+        const { logs, ...jobWithoutLogs } = job;
+        return jobWithoutLogs;
+      });
+
+    if (this.repository) {
+      try {
+        await this.repository.saveArtifact("__system__", "active_jobs", activeAndWaiting);
+      } catch {
+        // Might fail if __system__ project doesn't exist. 
+      }
+    }
+
+    if (this.persistFile) {
+      try {
+        const dir = join(this.persistFile, "..");
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        writeFileSync(this.persistFile, JSON.stringify(activeAndWaiting, null, 2), "utf8");
+      } catch (e) {
+        console.error("Failed to persist jobs state", e);
+      }
     }
   }
 
@@ -118,8 +147,7 @@ export class JobManager {
       updatedAt: now
     };
     this.jobs.set(job.id, job);
-    this.persistJob(job);
-    this.persistLog(job.id, job.logs[0]!);
+    this.persistState();
 
     if (projectSlug) {
       this.locks.set(projectSlug, job.id);
@@ -143,6 +171,7 @@ export class JobManager {
       status: "running",
       approvalData,
       pendingApprovalContext: undefined,
+      waitingForStage: undefined,
       updatedAt: new Date().toISOString()
     });
     this.log(id, { message: "Job resumed after approval.", progress: job.progress });
@@ -159,14 +188,7 @@ export class JobManager {
   logs(id: string): AtlasJobLog[] {
     const memJob = this.jobs.get(id);
     if (!memJob) return [];
-    if (memJob.logs && memJob.logs.length > 0) return memJob.logs;
-    
-    try {
-      const content = readFileSync(join(this.jobsDir, `${id}.log.jsonl`), "utf8");
-      return content.split("\\n").filter((l: string) => l.trim()).map((l: string) => JSON.parse(l));
-    } catch {
-      return [];
-    }
+    return memJob.logs || [];
   }
 
   list(): AtlasJob[] {
@@ -182,22 +204,13 @@ export class JobManager {
       if (statuses.includes(job.status) && (options.olderThanMs === undefined || ageMs > options.olderThanMs)) {
         this.jobs.delete(job.id);
         removed += 1;
-        try {
-          import("node:fs").then(fs => {
-            fs.unlinkSync(join(this.jobsDir, `${job.id}.json`));
-            fs.unlinkSync(join(this.jobsDir, `${job.id}.log.jsonl`));
-          });
-        } catch {}
       }
     }
+    this.persistState();
     return { removed, remaining: this.jobs.size };
   }
 
   private async run<T>(job: AtlasJob<T>, task: (update: JobUpdateFn) => Promise<T>): Promise<void> {
-    if (job.status !== "running" && job.status !== "queued") {
-      // If resumed, it's already set to running. If new, it's queued.
-    }
-    
     this.patch(job.id, {
       status: "running",
       startedAt: job.startedAt ?? new Date().toISOString()
@@ -209,6 +222,7 @@ export class JobManager {
           this.patch(job.id, {
             status: "waiting_for_approval",
             pendingApprovalContext: update.waitContext,
+            waitingForStage: update.waitContext.stage,
             progress: update.progress ?? job.progress,
             currentStep: update.currentStep ?? job.currentStep
           });
@@ -261,7 +275,6 @@ export class JobManager {
       updatedAt: entry.at
     };
     this.jobs.set(id, updated);
-    this.persistLog(id, entry);
   }
 
   private patch(id: string, patch: Partial<AtlasJob>): void {
@@ -273,7 +286,7 @@ export class JobManager {
       updatedAt: new Date().toISOString()
     };
     this.jobs.set(id, updated);
-    this.persistJob(updated);
+    this.persistState();
   }
 
   private enforceLimit(): void {
@@ -286,6 +299,7 @@ export class JobManager {
       if (this.jobs.size <= maxJobs) return;
       this.jobs.delete(job.id);
     }
+    this.persistState();
   }
 }
 

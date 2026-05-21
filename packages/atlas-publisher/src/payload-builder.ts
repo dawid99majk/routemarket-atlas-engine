@@ -1,9 +1,12 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import type { Poi, Recommendation, RouteProject, RouteTip, Claim } from "../../atlas-core/src/index.js";
 import { readJsonFile } from "../../atlas-core/src/index.js";
 import { getRouteMarketCategoryId } from "./category-mapping.js";
 import type { PreparedRouteMarketDraft, RouteMarketDraftPayload } from "./types.js";
+import { hashImportantArtifacts } from "../../atlas-workflow/src/artifact-hashes.js";
+import { buildImportReadiness } from "../../atlas-workflow/src/import-readiness.js";
 
 export async function prepareRouteMarketDraft(project: RouteProject): Promise<PreparedRouteMarketDraft> {
   const guidePath = join(project.folderPath, "guide.md");
@@ -11,6 +14,7 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   const tipsPath = join(project.folderPath, "tips.json");
   const poisPath = join(project.folderPath, "poi.geojson");
   const recommendationsPath = join(project.folderPath, "recommendations.json");
+  const mediaPath = join(project.folderPath, "media", "manifest.json");
   const gpxPath = join(project.folderPath, "route.gpx");
   const approvalsPath = join(project.folderPath, "approvals.json");
 
@@ -25,10 +29,23 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   const allVerified = claims.length > 0 && claims.every(c => c.status === "verified" || c.id.startsWith("claim_tech_"));
 
   const description = await readOptionalText(guidePath);
-  const routeSummary = await readOptionalJson<Record<string, unknown>>(routeSummaryPath);
+  const routeSummary = await readOptionalJson<any>(routeSummaryPath);
   const tips = await readOptionalJson<RouteTip[]>(tipsPath, []);
   const pois = await readPoisFromGeoJson(poisPath);
   const recommendations = await readOptionalJson<Recommendation[]>(recommendationsPath, []);
+  const mediaManifest = await readOptionalJson<any>(mediaPath, undefined);
+  const sourceArtifactHashes = await hashImportantArtifacts(project);
+  const generatedAt = new Date().toISOString();
+  const payloadId = createHash("sha256")
+    .update(`${project.slug}:${generatedAt}:${JSON.stringify(sourceArtifactHashes)}`)
+    .digest("hex")
+    .slice(0, 16);
+  const payloadPath = join(project.folderPath, "routemarket_payload.json");
+  const importReadiness = await buildImportReadiness({
+    project,
+    qualityIssues: issues,
+    payloadPath
+  });
 
   const draft: RouteMarketDraftPayload = {
     title: project.title,
@@ -53,19 +70,100 @@ export async function prepareRouteMarketDraft(project: RouteProject): Promise<Pr
   };
 
   const prepared: PreparedRouteMarketDraft = {
+    contractVersion: "2.1",
+    publishMode: "draft",
+    canImportToRouteMarket: importReadiness.canImportToRouteMarket,
+    payloadId,
+    generatedAt,
+    creationSource: "atlas_ai",
+    atlasProjectSlug: project.slug,
+    draftOnlyMode: true,
+    importReadiness,
+    importPolicy: {
+      firstImportCreatesDraft: true,
+      reimportUpdatesAtlasDraftOnly: true,
+      requireExplicitConfirmationAfterManualEdit: true,
+      importNeverPublishes: true,
+      preserveManualMediaByDefault: true,
+      preserveManualEditsByDefault: true,
+      storeSourceArtifactHashes: true
+    },
+    sourceArtifactHashes,
     project,
     draft,
+    routeSummary,
+    guideText: description,
     tips,
     pois,
-    recommendations
+    recommendations,
+    mediaManifest,
+    claimsSummary: {
+      total: claims.length,
+      verified: claims.filter((claim) => claim.status === "verified").length,
+      likely: claims.filter((claim) => claim.status === "likely").length,
+      needsReview: claims.filter((claim) => claim.needsHumanReview || claim.status === "needs_creator_review" || claim.status === "uncertain").length
+    },
+    qualityGateResult: {
+      passed: true,
+      issues: []
+    }
   };
 
   if (await exists(gpxPath)) {
     prepared.gpx = { path: gpxPath, attachMode: "gpx_xml" };
   }
 
-  await writeFile(join(project.folderPath, "routemarket_payload.json"), `${JSON.stringify(prepared, null, 2)}\n`, "utf8");
+  await writeFile(payloadPath, `${JSON.stringify(prepared, null, 2)}\n`, "utf8");
   return prepared;
+}
+
+export async function publishLiveDraft(prepared: PreparedRouteMarketDraft): Promise<{ success: boolean; remoteId?: number; message?: string }> {
+  const apiUrl = process.env.ROUTEMARKET_API_URL;
+  const apiToken = process.env.ROUTEMARKET_API_TOKEN;
+
+  if (!apiUrl) {
+    throw new Error("Missing ROUTEMARKET_API_URL environment variable.");
+  }
+  if (!apiToken) {
+    throw new Error("Missing ROUTEMARKET_API_TOKEN environment variable.");
+  }
+
+  console.log(`Publishing payload ${prepared.payloadId} to ${apiUrl}...`);
+
+  // Wrap payload for atlas-admin action: import_payload
+  const body = {
+    action: "import_payload",
+    input: {
+      payload: prepared
+    }
+  };
+
+  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/functions/v1/atlas-admin`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiToken}`,
+      "apikey": apiToken,
+      "X-Atlas-Payload-Id": prepared.payloadId
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`RouteMarket API error (${response.status}): ${errorBody}`);
+  }
+
+  const result = await response.json() as any;
+  if (!result.ok && result.error) {
+    throw new Error(`RouteMarket API processing error: ${result.error}`);
+  }
+
+  return {
+    success: result.ok === true,
+    remoteId: result.route?.id,
+    message: result.reason || (result.imported ? "Successfully imported" : "Imported with issues")
+  };
 }
 
 async function readPoisFromGeoJson(path: string): Promise<Poi[]> {

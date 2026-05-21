@@ -1,6 +1,6 @@
 # Atlas API Contract
 
-Base URL locally:
+Base URL:
 
 ```txt
 http://localhost:8787
@@ -8,7 +8,7 @@ http://localhost:8787
 
 ## Auth
 
-If `ATLAS_API_TOKEN` is set, all endpoints except `GET /health`, `GET /version`, and `GET /manifest` require:
+If `ATLAS_API_TOKEN` is set, every endpoint except `GET /health`, `GET /version`, and `GET /manifest` requires:
 
 ```txt
 Authorization: Bearer <ATLAS_API_TOKEN>
@@ -20,7 +20,7 @@ or:
 X-Atlas-API-Token: <ATLAS_API_TOKEN>
 ```
 
-## Public Endpoints
+## Public
 
 ### GET /health
 
@@ -31,61 +31,16 @@ X-Atlas-API-Token: <ATLAS_API_TOKEN>
 ### GET /version
 
 ```json
-{
-  "name": "routemarket-atlas-engine",
-  "version": "0.1.0"
-}
+{ "name": "routemarket-atlas-engine", "version": "0.1.0" }
 ```
 
 ### GET /manifest
 
-Returns available endpoints and whether auth is enabled.
+Returns endpoint list and auth metadata.
 
-## Private Endpoints
-
-### GET /categories
-
-Returns Atlas categories and RouteMarket category IDs where known.
-
-### GET /providers
-
-Returns source provider availability without exposing API keys.
-
-```json
-{
-  "defaultProvider": "mock",
-  "providers": [
-    {
-      "id": "mock",
-      "name": "Mock local fixtures",
-      "configured": true,
-      "activeByDefault": true,
-      "notes": "Always available for tests, demos, and offline development."
-    }
-  ]
-}
-```
-
-### GET /dashboard
-
-Returns project counts by status/category plus recent projects.
-
-### POST /discover
-
-Body:
-
-```json
-{
-  "category": "motorcycle",
-  "region": "Albania",
-  "language": "en",
-  "limit": 10
-}
-```
+## Project Creation
 
 ### POST /projects
-
-Body:
 
 ```json
 {
@@ -96,69 +51,136 @@ Body:
 }
 ```
 
+Creates `routes/<slug>/` with starter files, empty approvals and input folders.
+
 ### GET /projects
 
-Lists local route projects.
-
-Optional query params:
-
-- `status`
-- `category`
-- `q`
-- `limit`
-- `offset`
+Optional query params: `status`, `category`, `q`, `limit`, `offset`.
 
 ### GET /projects/:slug
 
-Returns local project metadata.
+Returns project metadata.
 
-### GET /projects/:slug/bundle
+## Creator Input Endpoints
 
-Returns project metadata, artifacts, and timeline events in one response for admin screens.
+These endpoints support the new Creator-Grade Pipeline by allowing users to feed raw data (notes, GPX, links) into the engine before the workflow is triggered. They accept JSON text payloads.
 
-### GET /projects/:slug/export
-
-Returns a JSON export bundle with project metadata, artifact metadata/content, and timeline events.
-
-### POST /projects/:slug/archive
-
-Sets project status to `archived` and logs an archive event.
-
-Body:
+### POST /projects/:slug/inputs/notes
 
 ```json
 {
-  "reason": "Duplicate or no longer useful"
+  "fileName": "creator-notes.md",
+  "content": "Long route description and practical notes...",
+  "note": "optional internal note"
 }
 ```
 
+Allowed extensions: `.md`, `.txt`. Max content size: 1 MB.
+Useful for providing hard facts from the creator.
+
+### POST /projects/:slug/inputs/gpx
+
+```json
+{
+  "fileName": "route.gpx",
+  "content": "<?xml version=\"1.0\"?><gpx>...</gpx>"
+}
+```
+
+Allowed extension: `.gpx`. Max content size: 5 MB.
+Required for spatial routing and GPX analysis.
+
+### POST /projects/:slug/inputs/links
+
+```json
+{
+  "url": "https://example.com/route-source",
+  "note": "optional context"
+}
+```
+
+### POST /projects/:slug/inputs/external
+
+Registers a file already stored by RouteMarket or another storage service. Atlas records metadata only and does not fetch the file.
+
+```json
+{
+  "type": "document",
+  "originalName": "roadbook.pdf",
+  "storageKey": "uploads/roadbook.pdf",
+  "mimeType": "application/pdf",
+  "sizeBytes": 1234
+}
+```
+
+## Research And GPX
+
+### POST /projects/:slug/collect-sources
+
+```json
+{ "provider": "auto", "limit": 20 }
+```
+
+### POST /projects/:slug/research-pack
+
+Builds the fundamental `research_pack.json` from creator-provided input manifest items and external sources. Required before the automated workflow can properly process facts.
+
+### POST /projects/:slug/analyze-gpx
+
+Analyzes provided GPX data without hallucinating missing fields (e.g., season or surface). Extracts precise facts into:
+- `route_summary.json`
+- `route_segments.json`
+- `route_segments.geojson` (LineStrings for spatial mapping)
+- `route_warnings.json` (Severity-based warnings for missing timestamps/elevation)
+- `elevation_profile.json`
+
+### POST /projects/:slug/deep-research
+
+```json
+{ "sourceLimit": 3 }
+```
+
+Writes `deep_research.json` and extracted claims/POIs.
+
+## Workflow And Approvals
+
+### POST /projects/:slug/run-mvp2
+
+Runs the creator-grade workflow synchronously. It implements the Human-In-The-Loop paradigm by pausing at the first missing approval step:
+
+```json
+{
+  "status": "paused",
+  "step": "gpx",
+  "stage": "gpx_summary_approval"
+}
+```
+
+### POST /projects/:slug/jobs/run-mvp2
+
+Starts the same workflow asynchronously as a tracked job.
+
+### POST /jobs/:id/approve
+
+Approves the pending stage for a job and triggers essential side-effects (e.g., changing claims status from `needs_creator_review` to `verified`, setting GPX summary as `validated`) before resuming the workflow.
+
+```json
+{ "approvalData": {} }
+```
+
+### GET /jobs/:id
+### GET /jobs/:id/logs
+### GET /jobs
+### POST /jobs/prune
+
+## Review And Artifacts
+
 ### GET /projects/:slug/readiness
-
-Returns automated review readiness:
-
-- `status`: `ready`, `needs_review`, or `blocked`,
-- `score`: 0-100,
-- `checks`,
-- `blockingCount`,
-- `warningCount`.
-
 ### GET /projects/:slug/review
 
-Returns a review bundle for admin screens:
-
-- project metadata,
-- automated readiness,
-- source summary,
-- claim summary,
-- required artifact summary,
-- latest saved review decision,
-- recent project events.
+Returns project metadata, approval states, quality gate issues, and the next required action.
 
 ### POST /projects/:slug/review/decision
-
-Saves a human review decision, writes `review_decision.json`, logs `review.decision`, and updates project status.
-
-Body:
 
 ```json
 {
@@ -168,152 +190,33 @@ Body:
 }
 ```
 
-Decision to status mapping:
-
-- `approved` -> `approved_for_publish`
-- `changes_requested` -> `changes_requested`
-- `blocked` -> `blocked`
-
-### PATCH /projects/:slug/status
-
-Body:
-
-```json
-{
-  "status": "ready_for_review"
-}
-```
-
 ### GET /projects/:slug/artifacts
-
-Returns known project artifacts with existence, size, and update metadata.
-
 ### GET /projects/:slug/events
+### GET /projects/:slug/files?path=guide.md
+### PUT /projects/:slug/files?path=guide.md
 
-Returns project timeline events such as source collection, workflow steps, and status changes.
-
-### POST /projects/:slug/collect-sources
-
-Collects mock/provider sources.
-
-Body:
-
-```json
-{
-  "provider": "auto",
-  "limit": 20
-}
-```
-
-Provider modes:
-
-- `auto`: use Brave Search when `BRAVE_SEARCH_API_KEY` exists, otherwise use mock data.
-- `mock`: deterministic local development data.
-- `brave`: require Brave Search and return an error when `BRAVE_SEARCH_API_KEY` is missing.
-
-### POST /projects/:slug/deep-research
-
-Runs deep extraction on collected sources. The current implementation uses the provider interface and mock extractor by default.
-
-Body:
-
-```json
-{
-  "sourceLimit": 3
-}
-```
-
-Writes:
-
-- `deep_research.json`
-- `research/deep/source_001.txt`
-- updated `sources.json` with `rawContentPath` and `deepResearchStatus`
-- updated `claims.json` with extracted claims
-- updated `poi.geojson` when extracted POI can be mapped or has coordinates
-
-### POST /projects/:slug/run-mvp2
-
-Runs local MVP 2 workflow and sets project status to `ready_for_review`.
-
-### POST /projects/:slug/jobs/run-mvp2
-
-Starts the MVP 2 workflow asynchronously.
-
-Response:
-
-```json
-{
-  "job": {
-    "id": "job_...",
-    "type": "run-mvp2:project-slug",
-    "status": "queued"
-  }
-}
-```
-
-### GET /jobs
-
-Lists in-memory jobs for the current API process.
-
-### POST /jobs/prune
-
-Removes completed/failed jobs from memory.
-
-Body:
-
-```json
-{
-  "olderThanMs": 3600000
-}
-```
-
-### GET /jobs/:id
-
-Returns one job status. Job statuses:
-
-- `queued`
-- `running`
-- `completed`
-- `failed`
-
-The job object includes:
-
-- `progress`: number from 0 to 100,
-- `currentStep`,
-- `logs`,
-- `result` when completed,
-- `error` when failed.
-
-### GET /jobs/:id/logs
-
-Returns only job log entries.
+## Publish Preparation
 
 ### POST /projects/:slug/prepare-publish
 
-Writes `routemarket_payload.json`.
+Runs rigorous Quality Gates. It strictly blocks publish preparation if:
+- A `blocking: true` flag is present in `missing_inputs.json`.
+- `guide.md` contains fallback phrases (e.g. `todo`, `tbd`, `unknown`).
+- GPX summary is unvalidated.
+- The `guide_final_approval` (or any other required approval) is missing.
+- GPX was provided but `route_segments.geojson` was not generated.
 
-**Note:** This endpoint is protected by Quality Gates and will return HTTP 422 `quality_gate_failed` with a list of issues if the project does not meet strict quality thresholds (e.g., sufficient sources, valid POIs, no placeholder text).
-
-### GET /projects/:slug/files?path=guide.md
-
-Reads an allowed project file. Only safe known project artifacts are readable.
-
-### PUT /projects/:slug/files?path=guide.md
-
-Writes an allowed editable project file. Writable files are intentionally limited to review/editing artifacts such as:
-
-- `brief.md`
-- `notes.md`
-- `route_concept.md`
-- `guide.md`
-- `quality_report.md`
-- `review_checklist.md`
-- `media/license_report.md`
-
-Body:
+On failure:
 
 ```json
 {
-  "content": "# Edited guide"
+  "error": "Quality Gate Failed",
+  "code": "quality_gate_failed",
+  "details": [
+    { "rule": "placeholder_in_guide", "message": "guide.md contains placeholder text: 'todo'." },
+    { "rule": "missing_approval_guide_final_approval", "message": "Required approval missing: guide_final_approval" }
+  ]
 }
 ```
+
+If it passes all Quality Gates, it successfully writes `routemarket_payload.json` compliant with the contract version.

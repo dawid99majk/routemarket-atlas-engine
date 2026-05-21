@@ -1,10 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RouteProject, Source } from "../../atlas-core/src/index.js";
+import type { RouteProject, Source, ProjectRepository } from "../../atlas-core/src/index.js";
 
 export type GenerateResearchBriefInput = {
   project: RouteProject;
   sources?: Source[];
+  repository?: ProjectRepository;
 };
 
 export async function generateResearchBrief(input: GenerateResearchBriefInput): Promise<string> {
@@ -50,7 +51,11 @@ Goal: create a practical RouteMarket-ready research pack for this route.
 ${sourceLines || "No sources collected yet."}
 `;
 
-  await writeFile(join(input.project.folderPath, "brief.md"), brief, "utf8");
+  if (input.repository) {
+    await input.repository.writeProjectFile(input.project.id, "brief.md", brief);
+  } else {
+    await writeFile(join(input.project.folderPath, "brief.md"), brief, "utf8");
+  }
   return brief;
 }
 

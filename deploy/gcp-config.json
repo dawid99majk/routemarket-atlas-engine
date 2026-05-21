@@ -1,0 +1,25 @@
+{
+  "projectId": "outemarketplace",
+  "serviceName": "atlas-api",
+  "serviceUrl": "https://atlas-api-r7ozixjv3q-ew.a.run.app",
+  "region": "europe-west1",
+  "artifactRegistryRepository": "routemarket-atlas",
+  "runtimeServiceAccount": "atlas-api-runner@outemarketplace.iam.gserviceaccount.com",
+  "resourceLimits": {
+    "memory": "2Gi",
+    "cpu": "1"
+  },
+  "scaling": {
+    "minInstances": 0,
+    "maxInstances": 10
+  },
+  "environment": "production",
+  "secrets": [
+    "atlas-api-token",
+    "atlas-supabase-url",
+    "atlas-supabase-service-role-key",
+    "atlas-gemini-api-key",
+    "atlas-google-maps-api-key",
+    "atlas-graphhopper-api-key"
+  ]
+}

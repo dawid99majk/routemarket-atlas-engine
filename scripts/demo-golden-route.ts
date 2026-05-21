@@ -1,66 +1,117 @@
 import { AtlasWorkflowService } from "../packages/atlas-workflow/src/index.js";
 import { join } from "node:path";
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { generateClaims, extractPois } from "../packages/atlas-research/src/index.js";
+import { generateGuideV2, writeGuideOutline, generateRouteConcept, generateRouteTips, generateRecommendations, prepareMediaPack, generateQualityReport, writeReviewChecklist } from "../packages/atlas-writer/src/index.js";
+import { loadProject } from "../apps/cli/src/commands/load-project.js";
+import { assessProjectReadiness } from "../packages/atlas-workflow/src/readiness.js";
+import { checkQualityGates } from "../packages/atlas-workflow/src/quality-gates.js";
 
-async function run() {
-  const rootDir = process.cwd();
+export async function runGoldenRoutePipeline(rootDir: string, slug: string = "golden-motorcycle-route") {
   const service = new AtlasWorkflowService({ rootDir });
-  const slug = "golden-alps";
+  const projectPath = join(rootDir, "routes", slug);
 
   console.log("--- STARTING GOLDEN ROUTE DEMO ---");
+  await rm(projectPath, { recursive: true, force: true });
   
   // 1. Create Project
-  console.log("\n[1/5] Creating project...");
-  await service.createProject({
-    topic: "The Golden Alps",
+  console.log("\n[1/8] Creating project...");
+  const project = await service.createProject({
+    topic: slug.split('-').join(' '),
     category: "motorcycle",
     region: "Albania",
     language: "en"
   });
+  
+  // Update slug just to be sure we are working with correct one
+  if (project.id !== slug) {
+      project.id = slug;
+      project.slug = slug;
+      project.folderPath = projectPath;
+      await writeFile(join(projectPath, "project.json"), JSON.stringify(project, null, 2));
+  }
 
   // 2. Add Input (simulated)
-  console.log("[2/5] Adding input materials...");
-  const projectPath = join(rootDir, "routes", "the-golden-alps");
+  console.log("[2/8] Adding input materials...");
+  const now = new Date().toISOString();
   await copyFile(join(rootDir, "fixtures", "golden-route", "route.gpx"), join(projectPath, "route.gpx"));
   await copyFile(join(rootDir, "fixtures", "golden-route", "notes.md"), join(projectPath, "notes.md"));
   await copyFile(join(rootDir, "fixtures", "golden-route", "sources.json"), join(projectPath, "sources.json"));
   
   await writeFile(join(projectPath, "input_manifest.json"), JSON.stringify({
-    projectId: "the-golden-alps",
+    projectId: slug,
+    updatedAt: now,
     items: [
-      { id: "note_1", type: "note", originalName: "Albania Tips", path: "notes.md", status: "usable" }
+      { id: "note_1", type: "note", originalName: "Albania Tips", path: "notes.md", status: "added", mimeType: "text/markdown", sizeBytes: 100, addedAt: now },
+      { id: "gpx_1", type: "gpx", originalName: "route.gpx", path: "route.gpx", status: "added", mimeType: "application/gpx+xml", sizeBytes: 1000, addedAt: now }
     ]
   }, null, 2));
+
+  // 3. Build research pack
+  console.log("\n[3/8] Building research pack...");
+  await service.buildResearchPack(slug);
+
+  // 4. Analyze GPX
+  console.log("[4/8] Analyzing GPX...");
+  await service.analyzeGpx(slug);
+  await service.approveStage(slug, "gpx_summary_approval", "approved", "Auto-approved GPX");
+
+  // 5. Generate claims and POIs
+  console.log("[5/8] Generating claims and POIs...");
+  const loadedProject = await loadProject(rootDir, slug);
+  await generateClaims(loadedProject, (service as any).repository);
+  await extractPois(loadedProject, (service as any).repository);
   
-  await mkdir(join(projectPath, "input", "photos"), { recursive: true });
-  await writeFile(join(projectPath, "input", "photos", "cover.jpg"), "fake-image-content");
+  // 6. Simulate Approvals
+  console.log("[6/8] Simulating Approvals...");
+  await service.approveStage(slug, "claims_approval", "approved", "Auto-approved claims");
+  await service.approveStage(slug, "poi_approval", "approved", "Auto-approved POIs");
 
-  // 3. Run Pipeline (Pause 1: GPX)
-  console.log("\n[3/5] Running pipeline - Step: Input & GPX...");
-  let res = await service.runMvp2WithProgress("the-golden-alps");
-  console.log(`Pipeline paused at: ${res.step}. Approving...`);
-  await service.approveStage("the-golden-alps", "gpx_summary_approval", "approved");
+  console.log("[7/8] Generating concepts, outline, and final guide...");
+  const sourcesText = await readFile(join(projectPath, "sources.json"), "utf8");
+  const sources = JSON.parse(sourcesText);
+  await generateRouteConcept({ project: loadedProject, sources, repository: (service as any).repository });
+  await service.approveStage(slug, "concept_approval", "approved", "Auto-approved concept");
+  
+  await writeGuideOutline(loadedProject, (service as any).repository);
+  await service.approveStage(slug, "guide_outline_approval", "approved", "Auto-approved outline");
 
-  // 4. Continue Pipeline (Wait for all approvals)
-  console.log("\n[4/5] Running pipeline and approving stages...");
-  const autoApprover = async () => {
-    while (true) {
-      res = await service.runMvp2WithProgress("the-golden-alps");
-      if (res.status === "completed") break;
-      if (res.status === "paused") {
-        const stageToApprove = (res as any).stage || res.step;
-        console.log(`Auto-approving: ${stageToApprove}`);
-        await service.approveStage("the-golden-alps", stageToApprove, "approved");
-      } else {
-        break;
+  await generateGuideV2(loadedProject, (service as any).repository);
+  await service.approveStage(slug, "guide_final_approval", "approved", "Auto-approved final guide");
+
+  // Finalize other required artifacts for publish readiness
+  await generateRouteTips(loadedProject, (service as any).repository);
+  await generateRecommendations(loadedProject, (service as any).repository);
+  await prepareMediaPack(loadedProject, (service as any).repository);
+  await writeReviewChecklist(loadedProject, (service as any).repository);
+  await generateQualityReport({ project: loadedProject, sources, gpxValid: true, geojsonValid: true, repository: (service as any).repository });
+
+  // 8. Prepare Publish
+  console.log("[8/8] Preparing to publish (dry-run)...");
+  try {
+      const draft = await service.preparePublish(slug);
+      console.log(`\nRouteMarket Payload Prepared (dry-run mode)`);
+      console.log(`- Project: ${slug}`);
+      console.log(`- Payload saved to: ${slug}/routemarket_payload.json`);
+  } catch (err: any) {
+      if (err.name === "QualityGateError") {
+          console.error(`\n[BLOCKED] Quality Gates failed for project ${slug}. Preparation aborted.`);
+          for (const issue of err.issues) {
+            console.error(` - [${issue.rule}] ${issue.message}`);
+          }
+          throw err;
       }
-    }
-  };
-  await autoApprover();
+      throw err;
+  }
   
   console.log("\n--- DEMO COMPLETED ---");
-  console.log(`Project ready: routes/the-golden-alps`);
-  console.log(`Payload: routes/the-golden-alps/routemarket_payload.json`);
 }
 
-run().catch(console.error);
+import { fileURLToPath } from "url";
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  runGoldenRoutePipeline(process.cwd()).catch(err => {
+      console.error(err);
+      process.exit(1);
+  });
+}

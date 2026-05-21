@@ -4,19 +4,47 @@ services:
       context: ..
       dockerfile: Dockerfile
     restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8787/health >/dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
     ports:
       - '127.0.0.1:8787:8787'
     environment:
       ATLAS_ROOT_DIR: /app
       ATLAS_API_PORT: 8787
       ATLAS_CORS_ORIGIN: https://routemarket.io
-      ATLAS_API_TOKEN: 178913a9cdd9271d077cd37dfded2afb76eaef72b220ec6c911b8509e1dece132712338c88769372979cc45f0ec6c241
+      ATLAS_API_TOKEN: ${ATLAS_API_TOKEN}
       ATLAS_LOG_REQUESTS: 'true'
       ATLAS_MAX_JOBS: '200'
-      BRAVE_SEARCH_API_KEY: ''
+      ATLAS_JOBS_DIR: /app/data/jobs
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
     volumes:
       - atlas-data:/app/data
       - atlas-routes:/app/routes
+    networks:
+      default:
+        aliases:
+          - atlas-api
+      supabase_default:
+        aliases:
+          - atlas-api
+      routemarket-network:
+        aliases:
+          - atlas-api
 volumes:
   atlas-data:
   atlas-routes:
+
+networks:
+  supabase_default:
+    external: true
+    name: supabase_default
+  routemarket-network:
+    external: true

@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import type { RouteProject, Source, Claim, RouteSummary } from "../../atlas-core/src/index.js";
 import { readJsonFile } from "../../atlas-core/src/index.js";
+import { findStaleApprovals, hashImportantArtifacts } from "./artifact-hashes.js";
 
 export type QualityIssue = {
   rule: string;
@@ -66,7 +67,23 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
     if (await fileExists(pPath("guide.md"))) {
       const guideContent = await readFile(pPath("guide.md"), "utf8");
       const lower = guideContent.toLowerCase();
-      const phrases = ["needs validation", "needs review", "not yet validated", "pending"];
+      const phrases = [
+        "needs validation",
+        "needs review",
+        "not yet validated",
+        "pending",
+        "todo",
+        "to be confirmed",
+        "unknown values",
+        "this route covers...",
+        "generic safety",
+        "not available in mvp",
+        "unknown",
+        "tbd",
+        "standard outdoor safety rules apply",
+        "plan ahead for water stops",
+        "based on collected research"
+      ];
       for (const phrase of phrases) {
         if (lower.includes(phrase)) {
           issues.push({ rule: "placeholder_in_guide", message: `guide.md contains placeholder text: "${phrase}".` });
@@ -90,8 +107,11 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
     if (claims.length < 3) {
       issues.push({ rule: "min_claims", message: `Not enough claims: ${claims.length}/3.` });
     }
-    if (claims.length > 0 && claims.every(c => c.status === "uncertain")) {
-      issues.push({ rule: "unverified_claims", message: "All claims have status 'uncertain'." });
+      if (claims.length > 0 && claims.every(c => c.status === "uncertain")) {
+        issues.push({ rule: "unverified_claims", message: "All claims have status 'uncertain'." });
+      }
+    if (!claims.some(c => c.status === "verified" || c.status === "likely")) {
+      issues.push({ rule: "missing_verified_claims", message: "At least one verified or likely claim is required." });
     }
   } catch (e) {
     issues.push({ rule: "claims_unreadable", message: "claims.json is missing or invalid." });
@@ -103,9 +123,33 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
     if (summary.validationStatus === "needs_validation") {
       issues.push({ rule: "summary_needs_validation", message: "route_summary.json status is marked as 'needs_validation'." });
     }
+    if (summary.validationStatus !== "validated") {
+      issues.push({ rule: "summary_not_validated", message: "GPX route summary must be validated before publish preparation." });
+    }
+    if (!Array.isArray((summary as any).routeSegments) || (summary as any).routeSegments.length === 0) {
+      issues.push({ rule: "missing_route_segments", message: "route_summary.json must include GPX-derived route segments." });
+    }
+    if (!Array.isArray((summary as any).warnings)) {
+      issues.push({ rule: "missing_route_warnings", message: "route_summary.json must include GPX analysis warnings." });
+    }
     // basic data check could go here if needed, but schema parsing in readJsonFile should ensure presence
   } catch (e) {
     issues.push({ rule: "missing_route_summary", message: "route_summary.json is missing or invalid." });
+  }
+
+  let hasGpxInput = false;
+  if (await fileExists(pPath("route.gpx"))) hasGpxInput = true;
+  try {
+    if (await fileExists(pPath("input/manifest.json"))) {
+      const manifest = await readJsonFile<any>(pPath("input/manifest.json"));
+      if (manifest?.items?.some((i: any) => i.type === "gpx")) {
+        hasGpxInput = true;
+      }
+    }
+  } catch {}
+
+  if (hasGpxInput && !(await fileExists(pPath("route_segments.geojson")))) {
+    issues.push({ rule: "missing_route_segments_geojson", message: "route_segments.geojson is required when GPX exists." });
   }
 
   // 9: Missing Inputs
@@ -128,8 +172,19 @@ export async function checkQualityGates(project: RouteProject): Promise<QualityI
           issues.push({ rule: `missing_approval_${r}`, message: `Required approval missing: ${r}` });
         }
       }
+      const stale = findStaleApprovals(approvals, await hashImportantArtifacts(project));
+      for (const item of stale) {
+        issues.push({ rule: `stale_approval_${item.stage}`, message: `Approval ${item.stage} is stale because ${item.file} changed.` });
+      }
     } else {
       issues.push({ rule: "missing_approvals_file", message: "approvals.json is missing." });
+    }
+  } catch {}
+
+  try {
+    const description = await readFile(pPath("guide.md"), "utf8");
+    if (description.trim().length < 500) {
+      issues.push({ rule: "description_too_short", message: "Payload description/guide is too short for RouteMarket publish preparation." });
     }
   } catch {}
 

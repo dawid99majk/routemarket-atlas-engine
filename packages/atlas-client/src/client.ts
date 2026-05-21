@@ -26,12 +26,18 @@ export type ProjectListFilters = {
 };
 
 export type CollectSourcesOptions = {
-  provider?: "auto" | "mock" | "brave";
+  provider?: "auto" | "mock" | "google";
   limit?: number;
 };
 
 export type DeepResearchOptions = {
   sourceLimit?: number;
+};
+
+export type TextInputRequest = {
+  fileName: string;
+  content: string;
+  note?: string;
 };
 
 export type ReviewDecisionRequest = {
@@ -130,6 +136,38 @@ export class AtlasClient {
     return this.request("POST", `/projects/${encodeURIComponent(slug)}/collect-sources`, options);
   }
 
+  addNote(slug: string, input: TextInputRequest): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/notes`, input);
+  }
+
+  addGpx(slug: string, input: TextInputRequest): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/gpx`, input);
+  }
+
+  addLink(slug: string, input: { url: string; note?: string }): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/links`, input);
+  }
+
+  registerExternalInput(slug: string, input: {
+    type: "note" | "document" | "photo" | "gpx" | "link";
+    originalName: string;
+    storageUrl?: string;
+    storageKey?: string;
+    mimeType: string;
+    sizeBytes: number;
+    note?: string;
+  }): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/inputs/external`, input);
+  }
+
+  buildResearchPack(slug: string): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/research-pack`, {});
+  }
+
+  analyzeGpx(slug: string): Promise<any> {
+    return this.request("POST", `/projects/${encodeURIComponent(slug)}/analyze-gpx`, {});
+  }
+
   runDeepResearch(slug: string, options: DeepResearchOptions = {}): Promise<any> {
     return this.request("POST", `/projects/${encodeURIComponent(slug)}/deep-research`, options);
   }
@@ -191,6 +229,10 @@ export class AtlasClient {
     return payload;
   }
 }
+
+export const RouteMarketAtlasClient = AtlasClient;
+export const MagicAiAtlasClient = AtlasClient;
+export const RouteMarketAtlasApiClient = AtlasClient;
 
 export class AtlasClientError extends Error {
   constructor(

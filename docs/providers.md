@@ -1,18 +1,18 @@
 # Source Providers
 
-Atlas source collection is provider-based. The workflow currently combines one web search provider with local video/forum fixtures.
+Atlas source collection is provider-based. The workflow combines one web search provider with local video/forum fixtures.
 
 ## Modes
 
 ```txt
 auto
 mock
-brave
+google
 ```
 
-- `auto`: default. Uses Brave Search when `BRAVE_SEARCH_API_KEY` exists, otherwise falls back to mock data.
+- `auto`: default. Uses Gemini Grounding with Google Search when `GEMINI_API_KEY` or `GOOGLE_API_KEY` exists, otherwise falls back to mock data.
 - `mock`: deterministic local data for development, tests, and demos without external API keys.
-- `brave`: forces Brave Search and fails fast if `BRAVE_SEARCH_API_KEY` is not configured.
+- `google`: forces Gemini Grounding with Google Search and fails fast if no Google/Gemini key is configured.
 
 ## CLI
 
@@ -20,7 +20,7 @@ brave
 npm run atlas -- providers
 npm run atlas -- collect-sources --project albania-motorcycle-route-7-days --provider auto --limit 20
 npm run atlas -- collect-sources --project albania-motorcycle-route-7-days --provider mock
-npm run atlas -- collect-sources --project albania-motorcycle-route-7-days --provider brave
+npm run atlas -- collect-sources --project albania-motorcycle-route-7-days --provider google
 ```
 
 ## API
@@ -43,10 +43,11 @@ Authorization: Bearer <ATLAS_API_TOKEN>
 
 ## VPS
 
-Set this only when real web search should be active:
+Set this only when real Google-backed search should be active:
 
 ```txt
-BRAVE_SEARCH_API_KEY=<your key>
+GEMINI_API_KEY=<your key>
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 Without the key, `auto` remains safe for local and VPS smoke flows because it falls back to `mock`.
@@ -59,4 +60,4 @@ Deep Research uses a separate provider interface:
 DeepResearchProvider.scrapeAndExtract(sourceUrl, topicContext)
 ```
 
-The current implementation ships with `MockDeepResearchProvider`, which lets the workflow, API, CLI, and frontend contract be tested before a real scraping/extraction backend is selected.
+Set `GEMINI_API_KEY` to enable real deep research extraction. Optional: set `GEMINI_MODEL` (defaults to `gemini-2.5-flash`). Google Places enrichment uses `GOOGLE_MAPS_API_KEY` or `GOOGLE_API_KEY` when available.
