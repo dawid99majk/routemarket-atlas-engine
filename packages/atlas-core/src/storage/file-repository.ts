@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir, mkdir, stat } from "node:fs/promises";
+import { readFile, writeFile, readdir, mkdir, stat, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { readJsonFile, readJsonFileWithSchema, writeJsonFile, exists } from "./json.js";
 import { routesPath } from "./paths.js";
@@ -124,6 +124,10 @@ export class FileProjectRepository implements ProjectRepository {
     } catch {
       return [];
     }
+  }
+
+  async deleteProject(slug: string): Promise<void> {
+    await rm(this.getProjectPath(slug), { recursive: true, force: true });
   }
 
   async loadSources(slug: string): Promise<Source[]> {

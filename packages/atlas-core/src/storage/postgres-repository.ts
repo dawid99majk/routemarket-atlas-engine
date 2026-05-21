@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   RouteProjectSchema,
@@ -140,6 +140,26 @@ export class PostgresProjectRepository implements ProjectRepository {
 
     if (error) throw error;
     return (data || []).map((d: any) => RouteProjectSchema.parse(d.data));
+  }
+
+  async deleteProject(slug: string): Promise<void> {
+    const { error: artifactsError } = await this.client
+      .from("atlas_artifacts")
+      .delete()
+      .eq("project_slug", slug);
+
+    if (artifactsError) throw artifactsError;
+
+    const { error: projectError } = await this.client
+      .from("atlas_projects")
+      .delete()
+      .eq("slug", slug);
+
+    if (projectError) throw projectError;
+
+    if (this.mirrorRootDir) {
+      await rm(this.getProjectPath(slug), { recursive: true, force: true });
+    }
   }
 
   async loadSources(slug: string): Promise<Source[]> {

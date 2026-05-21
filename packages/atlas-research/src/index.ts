@@ -12,3 +12,4 @@ export * from "./mock/mock-deep-research-provider.js";
 export * from "./workflow/claims.js";
 export * from "./workflow/pois.js";
 export * from "./workflow/deep-research.js";
+export * from "./workflow/ai-writing.js";

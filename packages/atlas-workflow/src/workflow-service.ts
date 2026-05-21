@@ -16,7 +16,16 @@ import {
 } from "../../atlas-core/src/index.js";
 import { z } from "zod";
 import { prepareRouteMarketDraft } from "../../atlas-publisher/src/index.js";
-import { collectSources, discoverDemand, extractPois, generateClaims, getSearchProviderStatus, runDeepResearch } from "../../atlas-research/src/index.js";
+import { 
+  collectSources, 
+  discoverDemand, 
+  extractPois, 
+  generateClaims, 
+  getSearchProviderStatus, 
+  runDeepResearch,
+  generateAiConcept,
+  generateAiGpx
+} from "../../atlas-research/src/index.js";
 import type { SearchProviderMode } from "../../atlas-research/src/index.js";
 import {
   generateGuideDraft,
@@ -122,6 +131,10 @@ export class AtlasWorkflowService {
   async listProjects(filters: ProjectListFilters = {}) {
     const projects = await this.repository.listProjects();
     return filterProjects(projects, filters);
+  }
+
+  async deleteProject(projectSlug: string) {
+    await this.repository.deleteProject(projectSlug);
   }
 
   listCategories() {
@@ -365,12 +378,28 @@ export class AtlasWorkflowService {
         run: async () => {
           await progress("Analyzing GPX.", 10, "gpx");
           const { analyzeGpx } = await import("../../atlas-research/src/index.js");
+          const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+
           try {
             await analyzeGpx(project, this.repository);
           } catch (err) {
-            console.warn("GPX analysis failed or file missing, continuing...");
+            console.warn("GPX analysis failed or file missing, attempting AI generation...");
+            if (geminiKey) {
+              try {
+                const claims = await this.loadClaims(projectSlug);
+                const pois = await this.getProjectPois(projectSlug);
+                if (pois.length > 0 || claims.length > 0) {
+                  const aiGpx = await generateAiGpx({ project, claims, pois, apiKey: geminiKey });
+                  await this.repository.writeProjectFile(project.id, "route.gpx", aiGpx);
+                  await analyzeGpx(project, this.repository);
+                  await progress("GPX generated via AI.", 12, "gpx");
+                }
+              } catch (aiErr) {
+                console.error("AI GPX generation failed:", aiErr);
+              }
+            }
           }
-          
+
           if (!await isApproved("gpx_summary_approval")) {
             await progress("GPX analyzed. Waiting for summary approval.", 15, "gpx_summary_approval", {
               type: "approval_needed",
@@ -379,8 +408,7 @@ export class AtlasWorkflowService {
             return { pause: true, stage: "gpx_summary_approval" };
           }
         }
-      },
-      {
+      },      {
         id: "claims",
         run: async () => {
           await progress("Generating claims.", 25, "claims");
@@ -414,8 +442,23 @@ export class AtlasWorkflowService {
         id: "concept",
         run: async () => {
           await progress("Writing route concept.", 55, "concept");
-          await generateRouteConcept({ project, sources, repository: this.repository });
-          
+          const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+
+          if (geminiKey) {
+            try {
+              const claims = await this.loadClaims(projectSlug);
+              const pois = await this.getProjectPois(projectSlug);
+              const aiConcept = await generateAiConcept({ project, sources, claims, pois, apiKey: geminiKey });
+              await this.repository.writeProjectFile(project.id, "route_concept.md", aiConcept);
+              await progress("Concept generated via AI.", 58, "concept");
+            } catch (aiErr) {
+              console.error("AI Concept generation failed, falling back to template:", aiErr);
+              await generateRouteConcept({ project, sources, repository: this.repository });
+            }
+          } else {
+            await generateRouteConcept({ project, sources, repository: this.repository });
+          }
+
           if (!await isApproved("concept_approval")) {
             await progress("Concept generated. Waiting for approval.", 60, "concept_approval", {
               type: "approval_needed",
@@ -424,8 +467,7 @@ export class AtlasWorkflowService {
             return { pause: true, stage: "concept_approval" };
           }
         }
-      },
-      {
+      },      {
         id: "guide_outline",
         run: async () => {
           await progress("Generating guide outline.", 70, "guide_outline");
@@ -668,6 +710,21 @@ export class AtlasWorkflowService {
 
   private loadClaims(projectSlug: string): Promise<Claim[]> {
     return this.repository.loadClaims(projectSlug);
+  }
+
+  private async getProjectPois(projectSlug: string): Promise<any[]> {
+    try {
+      const content = await this.repository.readProjectFile(projectSlug, "poi.geojson");
+      const geojson = JSON.parse(content);
+      return geojson.features.map((f: any) => ({
+        name: f.properties.name,
+        description: f.properties.description,
+        lat: f.geometry.coordinates[1],
+        lng: f.geometry.coordinates[0]
+      }));
+    } catch {
+      return [];
+    }
   }
 }
 

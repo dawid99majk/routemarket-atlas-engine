@@ -22,6 +22,7 @@ export interface ProjectRepository {
   getProject(slug: string): Promise<RouteProject>;
   saveProject(project: RouteProject): Promise<void>;
   listProjects(): Promise<RouteProject[]>;
+  deleteProject(slug: string): Promise<void>;
   
   loadSources(slug: string): Promise<Source[]>;
   saveSources(slug: string, sources: Source[]): Promise<void>;

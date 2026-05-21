@@ -152,6 +152,10 @@ function createRoutes(): Route[] {
     route("POST", "/projects", async ({ req, service }) => service.createProject(CreateProjectBodySchema.parse(await readJson(req)))),
     route("GET", "/projects", async ({ service, url }) => service.listProjects(projectFiltersFromUrl(url))),
     route("GET", "/projects/:slug", async ({ params, service }) => ({ project: await service.getProject(params.slug) })),
+    route("DELETE", "/projects/:slug", async ({ params, service }) => {
+      await service.deleteProject(params.slug);
+      return { success: true };
+    }),
     route("GET", "/projects/:slug/bundle", async ({ params, service }) => service.getProjectBundle(params.slug)),
     route("GET", "/projects/:slug/export", async ({ params, service }) => service.exportProject(params.slug)),
     route("POST", "/projects/:slug/archive", async ({ req, params, service }) => {
