@@ -35,6 +35,9 @@ services:
       supabase_default:
         aliases:
           - atlas-api
+      routemarket-network:
+        aliases:
+          - atlas-api
 volumes:
   atlas-data:
   atlas-routes:
@@ -43,3 +46,5 @@ networks:
   supabase_default:
     external: true
     name: supabase_default
+  routemarket-network:
+    external: true
